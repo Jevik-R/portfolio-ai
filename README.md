@@ -39,7 +39,7 @@ macro_overlay.py       ← L3: Nifty regime detector + VIX overlay
 ### 1. Clone & set up environment
 
 ```bash
-git clone https://github.com/<your-username>/portfolio-ai.git
+git clone https://github.com/Jevik-R/portfolio-ai.git
 cd portfolio-ai
 
 python3 -m venv venv
@@ -208,5 +208,5 @@ Consult a **SEBI-registered investment advisor (RIA)** before investing.
 
 ## 👨‍💻 Author
 
-Built as a **BTech Minor Project 2024–25**  
+Built as a **BTech Minor Project**  
 Powered by: FinBERT · Black-Litterman · PyPortfolioOpt · Streamlit
