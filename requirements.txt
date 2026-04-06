@@ -1,0 +1,26 @@
+# Core data & finance
+yfinance>=0.2.0
+pandas>=2.0.0
+numpy>=1.26.0
+scipy>=1.11.0
+
+# Portfolio optimisation
+pyportfolioopt>=1.6.0
+cvxpy>=1.4.0
+
+# NLP / FinBERT sentiment
+transformers>=4.35.0
+torch>=2.0.0
+
+# Dashboard
+streamlit>=1.28.0
+plotly>=5.18.0
+
+# News fetching
+requests>=2.31.0
+
+# Progress bar
+tqdm>=4.65.0
+
+# Optional — GPT-3.5 rationale & narratives
+openai>=1.0.0

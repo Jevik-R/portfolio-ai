@@ -1,0 +1,17 @@
+ticker,date,company,final_score,label,confidence,num_headlines,pct_positive,pct_negative,pct_neutral,sentiment_std
+TCS.NS,2026-04-03,Tata Consultancy Services,0.2353,slightly_bullish,0.9011,9,0.556,0.333,0.111,0.8235
+INFY.NS,2026-04-03,Infosys Ltd,0.2381,slightly_bullish,0.9214,3,0.667,0.333,0.0,0.8822
+WIPRO.NS,2026-04-03,Wipro Ltd,0.8358,bullish,0.8358,1,1.0,0.0,0.0,0.0
+HCLTECH.NS,2026-04-03,HCL Technologies,0.4182,bullish,0.8998,10,0.6,0.2,0.2,0.7297
+HDFCBANK.NS,2026-04-03,HDFC Bank Ltd,0.8064,bullish,0.8563,5,0.8,0.0,0.2,0.3717
+ICICIBANK.NS,2026-04-03,ICICI Bank Ltd,0.1422,slightly_bullish,0.7436,4,0.5,0.25,0.25,0.6911
+SBIN.NS,2026-04-03,State Bank of India,0.0,neutral,0.6048,2,0.0,0.0,1.0,0.0
+KOTAKBANK.NS,2026-04-03,Kotak Mahindra Bank,-0.3001,bearish,0.897,10,0.3,0.6,0.1,0.8385
+SUNPHARMA.NS,2026-04-03,Sun Pharmaceutical,0.8069,bullish,0.8069,1,1.0,0.0,0.0,0.0
+DRREDDY.NS,2026-04-03,Dr. Reddy's Laboratories,0.0,neutral,0.0,0,0.0,0.0,1.0,0.0
+HINDUNILVR.NS,2026-04-03,Hindustan Unilever,-0.501,bearish,0.9243,2,0.0,0.5,0.5,0.4812
+ITC.NS,2026-04-03,ITC Ltd,0.2133,slightly_bullish,0.7322,2,0.5,0.0,0.5,0.2794
+RELIANCE.NS,2026-04-03,Reliance Industries,-0.5347,bearish,0.8891,2,0.0,0.5,0.5,0.4875
+ONGC.NS,2026-04-03,Oil & Natural Gas Corp,0.6093,bullish,0.9058,6,0.667,0.0,0.333,0.4361
+LT.NS,2026-04-03,Larsen & Toubro,0.0,neutral,0.0,0,0.0,0.0,1.0,0.0
+BHARTIARTL.NS,2026-04-03,Bharti Airtel,0.4188,bullish,0.9068,4,0.75,0.25,0.0,0.8086

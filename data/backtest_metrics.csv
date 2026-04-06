@@ -1,0 +1,4 @@
+label,cumulative_ret,ann_return,ann_vol,sharpe,max_drawdown,calmar,n_periods,sentiment_alpha
+BL + Sentiment,1.3155,0.4872,0.2705,1.561,-0.2775,1.7559,55,-0.2381
+Pure Quant (Baseline),2.1699,0.7253,0.3023,2.1843,-0.2763,2.6251,55,0.0
+S&P 500,0.5524,0.2311,0.2268,0.7324,-0.2857,0.8088,55,

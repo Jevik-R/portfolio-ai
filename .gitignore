@@ -1,0 +1,52 @@
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Environment variables (API keys — NEVER commit these) ─────────────────────
+.env
+*.env
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ── Data files (large CSVs — fetched at runtime via data_collector.py) ────────
+data/prices.csv
+data/returns.csv
+data/backtest_results.csv
+
+# ── Sentiment cache (regenerated via sentiment_engine.py) ────────────────────
+data/sentiment_detail.csv
+
+# ── Keep these data files (small, important for BL weights) ──────────────────
+!data/market_caps.csv
+!data/sentiment_scores.csv
+!data/fx_rate.json
+!data/backtest_metrics.csv
+
+# ── macOS system files ────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+
+# ── IDE files ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+tempCodeRunnerFile.py
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+dist/
+build/
+.dist/
+*.egg-info/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
