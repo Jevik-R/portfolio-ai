@@ -23,7 +23,8 @@ from pypfopt import risk_models
 from pypfopt.risk_models import fix_nonpositive_semidefinite as fix_nonpsd
 from pypfopt.black_litterman import BlackLittermanModel, market_implied_prior_returns
 
-from sentiment_engine import load_sentiment_scores, get_bl_views, dynamic_alpha
+from llm_views import get_bl_views, dynamic_alpha
+from scorer import load_factor_scores
 
 warnings.filterwarnings("ignore")
 
@@ -182,10 +183,111 @@ def _load_fx_rate() -> float:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  VIEW HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _neutral_views(tickers: list) -> pd.DataFrame:
+    """Fallback: neutral views for all tickers when no view data is available."""
+    idx = pd.Index(tickers, name="ticker")
+    return pd.DataFrame({
+        "final_score":   0.0,
+        "label":         "neutral",
+        "confidence":    0.5,
+        "num_headlines": 0,
+        "pct_positive":  0.0,
+        "pct_negative":  0.0,
+        "pct_neutral":   1.0,
+        "sentiment_std": 0.0,
+        "q":             0.0,
+        "omega":         0.01,
+    }, index=idx)
+
+
+def _load_combined_views(tickers: list, alpha: float = 0.5) -> pd.DataFrame:
+    """
+    Blend LLM views and FinBERT sentiment scores.
+    alpha = weight given to LLM views; (1-alpha) = weight given to sentiment.
+    Agreement between signals → higher confidence; disagreement → lower.
+    """
+    # Load LLM views
+    try:
+        from llm_views import load_sentiment_scores as _load_llm
+        llm_df = _load_llm()
+    except Exception:
+        llm_df = pd.DataFrame()
+
+    # Load FinBERT sentiment
+    try:
+        from sentiment_engine import load_sentiment_scores as _load_sent
+        sent_df = _load_sent()
+    except Exception:
+        sent_df = pd.DataFrame()
+
+    # If only one is available, use that
+    if llm_df.empty and sent_df.empty:
+        return _neutral_views(tickers)
+    if llm_df.empty:
+        print("  ℹ️  LLM views missing — using sentiment only")
+        return sent_df
+    if sent_df.empty:
+        print("  ℹ️  Sentiment missing — using LLM views only")
+        return llm_df
+
+    # Both available — blend them
+    blended = llm_df.copy()
+
+    for ticker in tickers:
+        llm_available  = ticker in llm_df.index
+        sent_available = ticker in sent_df.index
+
+        if not llm_available and not sent_available:
+            continue
+        elif llm_available and not sent_available:
+            continue  # keep llm as-is
+        elif not llm_available and sent_available:
+            blended.loc[ticker] = sent_df.loc[ticker]
+            continue
+
+        # Both available for this ticker
+        llm_score  = float(llm_df.loc[ticker,  "final_score"])
+        sent_score = float(sent_df.loc[ticker, "final_score"])
+        llm_conf   = float(llm_df.loc[ticker,  "confidence"])
+        sent_conf  = float(sent_df.loc[ticker, "confidence"])
+
+        blended_score = alpha * llm_score + (1 - alpha) * sent_score
+
+        both_positive = llm_score > 0 and sent_score > 0
+        both_negative = llm_score < 0 and sent_score < 0
+        conf_adjustment = +0.10 if (both_positive or both_negative) else -0.10
+
+        blended_conf = float(np.clip(
+            (alpha * llm_conf + (1 - alpha) * sent_conf) + conf_adjustment,
+            0.05, 0.95
+        ))
+
+        if   blended_score >=  0.30: label = "bullish"
+        elif blended_score >=  0.05: label = "slightly_bullish"
+        elif blended_score <= -0.30: label = "bearish"
+        elif blended_score <= -0.05: label = "slightly_bearish"
+        else:                        label = "neutral"
+
+        blended.loc[ticker, "final_score"] = round(blended_score, 4)
+        blended.loc[ticker, "confidence"]  = round(blended_conf,  4)
+        blended.loc[ticker, "label"]       = label
+
+        # Store both individual scores for dashboard display
+        blended.loc[ticker, "llm_score"]  = round(llm_score,  4)
+        blended.loc[ticker, "sent_score"] = round(sent_score, 4)
+        blended.loc[ticker, "signals_agree"] = int(both_positive or both_negative)
+
+    return blended
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CORE BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_features(lookback_days: int = 252) -> dict:
+def build_features(lookback_days: int = 252, analysis_method: str = "llm") -> dict:
     """
     Build the complete feature set for portfolio optimisation.
 
@@ -193,6 +295,9 @@ def build_features(lookback_days: int = 252) -> dict:
     ----------
     lookback_days : int
         Number of trading days of history to use for covariance estimation.
+    analysis_method : str
+        One of "llm" (Groq/LLaMA views), "sentiment" (FinBERT news),
+        or "combined" (blended). Falls back to neutral if data is missing.
 
     Returns
     -------
@@ -212,15 +317,7 @@ def build_features(lookback_days: int = 252) -> dict:
     mcaps           = _load_market_caps()
     fx_rate         = _load_fx_rate()
 
-    try:
-        sentiment_df = load_sentiment_scores()
-    except FileNotFoundError:
-        sentiment_df = pd.DataFrame()
-
-    # ── Align tickers ─────────────────────────────────────────────────────────
-    # Tickers must exist in price/returns data. Sentiment is optional — if the
-    # saved sentiment_scores.csv has stale tickers (e.g. old US stocks), we fall
-    # back to neutral scores so the BL model still runs purely on market prior.
+    # ── Align tickers (prices first, views second) ────────────────────────────
     price_available = [t for t in STOCKS
                        if t in prices.columns and t in returns.columns]
 
@@ -228,26 +325,48 @@ def build_features(lookback_days: int = 252) -> dict:
         raise ValueError(f"Only {len(price_available)} tickers in prices.csv — "
                          f"run: python data_collector.py")
 
-    sentiment_available = [t for t in price_available if t in sentiment_df.index]
-    stale_sentiment     = len(sentiment_available) < 3
-
-    if stale_sentiment:
-        # sentiment_scores.csv has different tickers — build neutral placeholder
-        print("  ⚠️  sentiment_scores.csv has no matching NSE tickers. "
-              "Run: python sentiment_engine.py   (using neutral scores for now)")
-        idx = pd.Index(price_available, name="ticker")
-        sentiment_df = pd.DataFrame({
-            "final_score":   0.0,
-            "label":         "neutral",
-            "confidence":    0.5,
-            "num_headlines": 0,
-            "pct_positive":  0.0,
-            "pct_negative":  0.0,
-            "pct_neutral":   1.0,
-            "sentiment_std": 0.0,
-        }, index=idx)
-
     available = price_available
+
+    # ── Load views based on selected method ───────────────────────────────────
+    if analysis_method == "llm":
+        try:
+            from llm_views import load_sentiment_scores as _load_llm
+            sentiment_df = _load_llm()
+            print(f"  📊 Using LLM views (Groq/LLaMA)")
+        except FileNotFoundError:
+            print("  ⚠️  llm_views.csv not found — run llm_views.py first")
+            sentiment_df = _neutral_views(available)
+        except Exception as e:
+            print(f"  ⚠️  LLM views error: {e} — using neutral views")
+            sentiment_df = _neutral_views(available)
+
+    elif analysis_method == "sentiment":
+        try:
+            from sentiment_engine import load_sentiment_scores as _load_sent
+            sentiment_df = _load_sent()
+            print(f"  📰 Using FinBERT sentiment")
+            matching = [t for t in available if t in sentiment_df.index]
+            if len(matching) < 3:
+                print("  ⚠️  Sentiment file has no NSE tickers — using neutral views")
+                sentiment_df = _neutral_views(available)
+        except FileNotFoundError:
+            print("  ⚠️  sentiment_scores.csv not found — run sentiment_engine.py first")
+            sentiment_df = _neutral_views(available)
+        except Exception as e:
+            print(f"  ⚠️  Sentiment error: {e} — using neutral views")
+            sentiment_df = _neutral_views(available)
+
+    elif analysis_method == "combined":
+        sentiment_df = _load_combined_views(available)
+        print(f"  🔥 Using combined views (LLM + FinBERT sentiment)")
+
+    else:
+        sentiment_df = _neutral_views(available)
+
+    # Final safety net — if we still have no matching tickers, use neutral
+    if sentiment_df.empty or len([t for t in available if t in sentiment_df.index]) < 3:
+        print("  ⚠️  No matching view data — falling back to neutral views")
+        sentiment_df = _neutral_views(available)
 
     stock_prices  = prices[available].dropna()
 
@@ -298,6 +417,29 @@ def build_features(lookback_days: int = 252) -> dict:
         earnings_surprise=earnings_surprise,
     )
 
+    # ── Factor score blending  (graceful skip if factor_scores.csv missing) ──
+    factor_scores = load_factor_scores()
+    if factor_scores is not None:
+        # Keep only tickers that are both in BL universe and factor scores
+        factor_tickers = [t for t in available if t in factor_scores.index]
+        if factor_tickers:
+            print(f"\n  📐 Blending factor scores for {len(factor_tickers)} tickers "
+                  f"(60% LLM + 40% factor)")
+            for ticker in factor_tickers:
+                llm_view      = viewdict.get(ticker, float(mu_prior[ticker]))
+                combined_score = float(factor_scores.loc[ticker, "combined_score"])
+                # factor_score_view = market prior × (1 + combined_score)
+                # combined_score is 0→1; map to a ±view by centring at 0.5
+                factor_view    = float(mu_prior[ticker]) * (1 + (combined_score - 0.5))
+                # Blend: 60% LLM, 40% factor
+                blended        = 0.60 * llm_view + 0.40 * factor_view
+                viewdict[ticker] = round(blended, 6)
+        else:
+            factor_scores = None   # no overlap — skip factor display
+    else:
+        print("  ℹ️  factor_scores.csv not found — using pure LLM views "
+              "(run: python scorer.py to enable factor blending)")
+
     # ── Black-Litterman posterior ─────────────────────────────────────────────
     bl = BlackLittermanModel(
         S,
@@ -342,6 +484,7 @@ def build_features(lookback_days: int = 252) -> dict:
         "tickers":          available,
         "analyst_consensus":analyst_consensus,
         "sector_sentiment": sector_sentiment,
+        "factor_scores":    factor_scores,   # pd.DataFrame or None
     }
 
 
@@ -350,7 +493,9 @@ def build_features(lookback_days: int = 252) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    features = build_features()
+    import sys
+    method = sys.argv[1] if len(sys.argv) > 1 else "llm"
+    features = build_features(analysis_method=method)
     print(f"\n✅ Features ready. BL posterior μ range: "
           f"{features['mu_bl'].min():.2%} → {features['mu_bl'].max():.2%}")
     print(f"\nCurrent prices in INR:")

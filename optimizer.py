@@ -31,6 +31,7 @@ from pypfopt.black_litterman import BlackLittermanModel, market_implied_prior_re
 from feature_builder import build_features
 from sentiment_engine import get_sentiment_constraints
 from macro_overlay import get_macro_snapshot, apply_macro_overlay
+from risk_manager import apply_all_risk_controls
 
 warnings.filterwarnings("ignore")
 
@@ -223,8 +224,9 @@ def _weights_to_allocation(weights: dict, total_inr: float,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def optimize_fresh_investment(
-    investment_inr: float,
-    risk_profile:   str = "moderate",
+    investment_inr:  float,
+    risk_profile:    str = "moderate",
+    analysis_method: str = "llm",
 ) -> dict:
     """
     Optimise a fresh investment of `investment_inr` (₹).
@@ -242,10 +244,10 @@ def optimize_fresh_investment(
         summary      : dict          — Sharpe, expected return, vol, total deployed
         features     : dict          — BL features (for display)
     """
-    print(f"\n💰 FRESH INVESTMENT OPTIMISER  |  {_fmt_inr(investment_inr)}  |  {risk_profile}")
+    print(f"\n💰 FRESH INVESTMENT OPTIMISER  |  {_fmt_inr(investment_inr)}  |  {risk_profile}  |  {analysis_method}")
     print("=" * 60)
 
-    features     = build_features()
+    features     = build_features(analysis_method=analysis_method)
     mu_bl        = features["mu_bl"]
     S_bl         = features["S_bl"]
     sentiment_df = features["sentiment_df"]
@@ -253,6 +255,17 @@ def optimize_fresh_investment(
 
     weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile)
     weights, macro_snap, cash_buf, macro_scale = _apply_macro(weights)
+
+    # ── Risk Manager: vol targeting + drawdown control + position limits ──────
+    try:
+        weights, rm_cash, rm_info = apply_all_risk_controls(weights)
+        cash_buf = max(cash_buf, rm_info["total_cash"])
+        print(f"  ✅ Risk controls applied  |  Cash buffer: {rm_info['total_cash']:.1%}  "
+              f"Vol scale: {rm_info['vol_scale']:.2f}  Regime: {rm_info['dd_regime']}")
+    except Exception as e:
+        rm_info = {}
+        print(f"  ⚠️  Risk manager skipped: {e}")
+
     allocation = _weights_to_allocation(weights, investment_inr, prices_inr)
 
     # Portfolio-level performance estimate
@@ -262,9 +275,12 @@ def optimize_fresh_investment(
     port_vol = float(np.sqrt(port_var))
     sharpe   = (exp_ret - RISK_FREE_INR) / port_vol if port_vol > 0 else 0.0
 
+    cash_inr = investment_inr * cash_buf
+
     summary = {
         "total_investment_inr": investment_inr,
         "total_deployed_inr":   float(allocation["invested_inr"].sum()),
+        "cash_buffer_inr":      round(cash_inr, 2),
         "cash_leftover_inr":    float(allocation["cash_leftover"].iloc[0]) if not allocation.empty else 0.0,
         "expected_return":      round(exp_ret,  4),
         "expected_volatility":  round(port_vol, 4),
@@ -273,6 +289,8 @@ def optimize_fresh_investment(
         "risk_profile":         risk_profile,
         "macro_scale":          round(macro_scale, 4),
         "macro_cash_buffer":    round(cash_buf, 4),
+        "rm_vol_scale":         round(rm_info.get("vol_scale", 1.0), 4),
+        "rm_dd_regime":         rm_info.get("dd_regime", "n/a"),
     }
 
     # Print
@@ -303,6 +321,7 @@ def optimize_rebalancing(
     current_holdings: dict,
     additional_inr:   float = 0.0,
     risk_profile:     str   = "moderate",
+    analysis_method:  str   = "llm",
 ) -> dict:
     """
     Generate a rebalancing plan for an existing portfolio.
@@ -326,10 +345,10 @@ def optimize_rebalancing(
     total_capital    = current_total + additional_inr
 
     print(f"\n🔄 PORTFOLIO REBALANCER  |  current: {_fmt_inr(current_total)}  "
-          f"| adding: {_fmt_inr(additional_inr)}  | total: {_fmt_inr(total_capital)}")
+          f"| adding: {_fmt_inr(additional_inr)}  | total: {_fmt_inr(total_capital)}  |  {analysis_method}")
     print("=" * 65)
 
-    features     = build_features()
+    features     = build_features(analysis_method=analysis_method)
     mu_bl        = features["mu_bl"]
     S_bl         = features["S_bl"]
     sentiment_df = features["sentiment_df"]
@@ -337,6 +356,15 @@ def optimize_rebalancing(
 
     weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile)
     weights, macro_snap, cash_buf, macro_scale = _apply_macro(weights)
+
+    # ── Risk Manager ──────────────────────────────────────────────────────────
+    try:
+        weights, rm_cash, rm_info = apply_all_risk_controls(weights)
+        cash_buf = max(cash_buf, rm_info["total_cash"])
+    except Exception as e:
+        rm_info = {}
+        print(f"  ⚠️  Risk manager skipped: {e}")
+
     allocation = _weights_to_allocation(weights, total_capital, prices_inr)
 
     # ── Rebalancing actions ───────────────────────────────────────────────────
@@ -387,10 +415,17 @@ def optimize_rebalancing(
                     .sort_values(["action", "trade_inr"], ascending=[True, False])
                     .reset_index(drop=True))
 
-    # Transaction costs
-    total_traded       = sells_total + buys_total
-    transaction_cost   = round(total_traded * BROKERAGE_PCT, 2)
-    net_cash_from_sell = round(sells_total - transaction_cost / 2, 2)
+    # Transaction costs — real Zerodha formula (brokerage + STT + exchange + GST + SEBI + stamp)
+    try:
+        from data_collector import total_trade_cost as _zerodha_cost
+        buy_cost  = _zerodha_cost(buys_total,  "buy")
+        sell_cost = _zerodha_cost(sells_total, "sell")
+        transaction_cost = round(buy_cost + sell_cost, 2)
+    except Exception:
+        # Fallback: conservative 0.1% estimate if import fails
+        sell_cost = sells_total * BROKERAGE_PCT / 2
+        transaction_cost = round((buys_total + sells_total) * BROKERAGE_PCT, 2)
+    net_cash_from_sell = round(sells_total - sell_cost, 2)
 
     # Portfolio metrics
     w_arr   = np.array([weights.get(t, 0) for t in mu_bl.index])
@@ -406,6 +441,7 @@ def optimize_rebalancing(
         "buys_inr":             buys_total,
         "transaction_cost_inr": transaction_cost,
         "net_cash_from_sells":  net_cash_from_sell,
+        "cash_buffer_inr":      round(total_capital * cash_buf, 2),
         "expected_return":      round(exp_ret,  4),
         "expected_volatility":  round(port_vol, 4),
         "sharpe_ratio":         round(sharpe,   4),
@@ -413,6 +449,8 @@ def optimize_rebalancing(
         "risk_profile":         risk_profile,
         "macro_scale":          round(macro_scale, 4),
         "macro_cash_buffer":    round(cash_buf, 4),
+        "rm_vol_scale":         round(rm_info.get("vol_scale", 1.0), 4),
+        "rm_dd_regime":         rm_info.get("dd_regime", "n/a"),
     }
 
     # Print rebalancing plan
@@ -646,5 +684,7 @@ if __name__ == "__main__":
     if "--backtest" in sys.argv:
         run_walk_forward_backtest()
     else:
-        result = optimize_fresh_investment(100_000, risk_profile="moderate")
+        _method = "combined" if "--combined" in sys.argv else \
+                  "sentiment" if "--sentiment" in sys.argv else "llm"
+        result = optimize_fresh_investment(100_000, risk_profile="moderate", analysis_method=_method)
         print("\nTip: run with --backtest flag for full historical backtest.")
