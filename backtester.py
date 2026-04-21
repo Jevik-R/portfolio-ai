@@ -331,9 +331,11 @@ def run_enhanced_backtest(
     val_bl_net  = float(initial_capital)   # BL after costs
     val_bl_gross= float(initial_capital)   # BL before costs
     val_eq_net  = float(initial_capital)   # Equal weight after costs
+    val_mom_net = float(initial_capital)   # Momentum-only equal weight after costs
 
-    prev_bl_wts = {}
-    prev_eq_wts = {}
+    prev_bl_wts  = {}
+    prev_eq_wts  = {}
+    prev_mom_wts = {}
 
     total_costs       = 0.0
     total_buy_turnover  = 0.0
@@ -408,6 +410,20 @@ def run_enhanced_backtest(
             side = "buy" if dw > 0 else "sell"
             period_cost_eq += _zerodha_cost(trade_val, side)
 
+        # Momentum-only: same stocks as BL, equal weights, independent cost tracking
+        period_cost_mom = 0.0
+        for t in set(list(eq_weights.keys()) + list(prev_mom_wts.keys())):
+            new_w = float(eq_weights.get(t, 0.0))
+            old_w = float(prev_mom_wts.get(t, 0.0))
+            dw    = new_w - old_w
+            if abs(dw) < MIN_TRADE_WT:
+                continue
+            trade_val = abs(dw) * val_mom_net
+            if trade_val < MIN_TRADE_INR:
+                continue
+            side = "buy" if dw > 0 else "sell"
+            period_cost_mom += _zerodha_cost(trade_val, side)
+
         total_costs += period_cost_bl
 
         # ── Get period returns (next month prices) ─────────────────────────────
@@ -434,6 +450,7 @@ def run_enhanced_backtest(
 
         bl_ret  = _period_return(bl_weights, val_bl_net)
         eq_ret  = _period_return(eq_weights, val_eq_net)
+        mom_ret = _period_return(eq_weights, val_mom_net)   # same stocks, equal weights
 
         # Nifty 50
         nifty_ret = 0.0
@@ -444,26 +461,31 @@ def run_enhanced_backtest(
                 nifty_ret = float(nb_e.iloc[-1]) / float(nb_s.iloc[-1]) - 1.0
 
         # ── Update portfolio values ────────────────────────────────────────────
-        cost_drag_bl = period_cost_bl / val_bl_net if val_bl_net > 0 else 0
-        cost_drag_eq = period_cost_eq / val_eq_net if val_eq_net > 0 else 0
+        cost_drag_bl  = period_cost_bl  / val_bl_net  if val_bl_net  > 0 else 0
+        cost_drag_eq  = period_cost_eq  / val_eq_net  if val_eq_net  > 0 else 0
+        cost_drag_mom = period_cost_mom / val_mom_net if val_mom_net > 0 else 0
 
-        val_bl_net   *= (1 + bl_ret - cost_drag_bl)
+        val_bl_net   *= (1 + bl_ret  - cost_drag_bl)
         val_bl_gross *= (1 + bl_ret)
-        val_eq_net   *= (1 + eq_ret - cost_drag_eq)
+        val_eq_net   *= (1 + eq_ret  - cost_drag_eq)
+        val_mom_net  *= (1 + mom_ret - cost_drag_mom)
 
         prev_bl_wts  = dict(bl_weights)
         prev_eq_wts  = dict(eq_weights)
+        prev_mom_wts = dict(eq_weights)
 
         records.append({
             "date":          rebal_date,
-            "bl_net":        round(bl_ret - cost_drag_bl, 6),
-            "bl_gross":      round(bl_ret,                6),
-            "eq_net":        round(eq_ret - cost_drag_eq, 6),
-            "nifty":         round(nifty_ret,             6),
-            "period_costs":  round(period_cost_bl,        2),
-            "val_bl_net":    round(val_bl_net,            2),
-            "val_bl_gross":  round(val_bl_gross,          2),
-            "val_eq_net":    round(val_eq_net,            2),
+            "bl_net":        round(bl_ret - cost_drag_bl,   6),
+            "bl_gross":      round(bl_ret,                  6),
+            "eq_net":        round(eq_ret - cost_drag_eq,   6),
+            "mom_net":       round(mom_ret - cost_drag_mom, 6),
+            "nifty":         round(nifty_ret,               6),
+            "period_costs":  round(period_cost_bl,          2),
+            "val_bl_net":    round(val_bl_net,              2),
+            "val_bl_gross":  round(val_bl_gross,            2),
+            "val_eq_net":    round(val_eq_net,              2),
+            "val_mom_net":   round(val_mom_net,             2),
             "n_stocks":      len(selected),
         })
 
@@ -526,12 +548,13 @@ def run_enhanced_backtest(
     m2 = _metrics(results_df["val_bl_gross"],  "Momentum+Vol BL  (Before Costs)", 0.0)
     m3 = _metrics(results_df["val_eq_net"],    "Equal Weight     (After Costs)",  0.0)
     m4 = _metrics(nifty_val,                   "Nifty 50         (Buy & Hold)",   0.0)
+    m5 = _metrics(results_df["val_mom_net"],   "Momentum Only    (After Costs)",  0.0)
 
     # Add cost drag explicitly to before-costs row
     m2["total_costs_inr"] = 0
     m2["cost_drag_ann"]   = 0.0
 
-    metrics_df = pd.DataFrame([m1, m2, m3, m4])
+    metrics_df = pd.DataFrame([m1, m2, m3, m4, m5])
 
     # ── Save results ───────────────────────────────────────────────────────────
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -625,13 +648,184 @@ def estimate_annual_costs(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  MONTE CARLO SIMULATION  (statistical significance test)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_monte_carlo(
+    n_simulations:   int   = 500,
+    seed:            int   = 42,
+    initial_capital: float = 1_000_000,
+    start_date:      str   = "2019-01-01",
+    top_n:           int   = TOP_N,
+    rebal_days:      int   = REBAL_DAYS,
+    our_cagr:        float = 0.1590,
+) -> pd.DataFrame:
+    """
+    Run Monte Carlo simulation: 500 random equal-weight portfolios using the
+    same universe, date range, capital, and Zerodha cost model as the main backtest.
+
+    Each simulation randomly selects top_n stocks at each rebalancing date from
+    the eligible universe. Returns a DataFrame with one row per simulation.
+
+    Saves results to data/monte_carlo_results.csv.
+    """
+    import random
+
+    rng = np.random.default_rng(seed)
+    random.seed(seed)
+
+    # Load price data (same logic as run_enhanced_backtest)
+    for fname in ["nifty100_prices.csv", "prices.csv"]:
+        fpath = f"{DATA_DIR}/{fname}"
+        if os.path.exists(fpath):
+            prices_df  = pd.read_csv(fpath, index_col=0, parse_dates=True)
+            returns_path = fpath.replace("prices", "returns")
+            returns_df = pd.read_csv(
+                returns_path, index_col=0, parse_dates=True,
+            ) if os.path.exists(returns_path) else prices_df.pct_change().dropna()
+            break
+    else:
+        raise FileNotFoundError("No price data found. Run data_collector.py first.")
+
+    prices_df  = prices_df[prices_df.index >= start_date]
+    returns_df = returns_df[returns_df.index >= start_date]
+
+    BENCH       = "NIFTY50"
+    all_tickers = [c for c in prices_df.columns if c != BENCH]
+
+    all_dates   = prices_df.index.tolist()
+    rebal_idx   = list(range(LOOKBACK, len(all_dates), rebal_days))
+    rebal_dates = [all_dates[i] for i in rebal_idx]
+    n_periods   = len(rebal_dates) - 1
+
+    PPY = 252 / rebal_days
+
+    print(f"\n{'═'*65}")
+    print(f"  MONTE CARLO SIMULATION  ({n_simulations} random portfolios)")
+    print(f"{'═'*65}")
+    print(f"  Universe     : {len(all_tickers)} tickers")
+    print(f"  Period       : {rebal_dates[0].date()} → {rebal_dates[-1].date()}")
+    print(f"  Stocks/port  : {top_n}  (random equal-weight)")
+    print(f"  Costs        : Zerodha exact (same as main backtest)")
+    print(f"{'─'*65}\n")
+
+    sim_rows = []
+
+    for sim_id in range(n_simulations):
+        if (sim_id + 1) % 100 == 0:
+            print(f"  Simulation {sim_id+1}/{n_simulations}…")
+
+        val        = float(initial_capital)
+        prev_wts   = {}
+        val_series = [val]
+
+        for i, rebal_date in enumerate(rebal_dates[:-1]):
+            next_date = rebal_dates[i + 1]
+
+            prices_to  = prices_df.loc[:rebal_date]
+
+            eligible = get_eligible_stocks(returns_df, rebal_date, min_history=MIN_HIST_DAYS)
+            if len(eligible) < top_n:
+                val_series.append(val)
+                continue
+
+            # Random selection (reproducible per sim via rng)
+            chosen = list(rng.choice(eligible, size=top_n, replace=False))
+            weights = {t: 1.0 / top_n for t in chosen}
+
+            # Transaction costs
+            period_cost = 0.0
+            for t in set(list(weights.keys()) + list(prev_wts.keys())):
+                new_w = float(weights.get(t, 0.0))
+                old_w = float(prev_wts.get(t, 0.0))
+                dw    = new_w - old_w
+                if abs(dw) < MIN_TRADE_WT:
+                    continue
+                trade_val = abs(dw) * val
+                if trade_val < MIN_TRADE_INR:
+                    continue
+                side = "buy" if dw > 0 else "sell"
+                period_cost += _zerodha_cost(trade_val, side)
+
+            # Period return
+            period_mask   = (prices_df.index > rebal_date) & (prices_df.index <= next_date)
+            period_prices = prices_df[period_mask]
+            if period_prices.empty:
+                val_series.append(val)
+                continue
+
+            ret = 0.0
+            for t, w in weights.items():
+                if t not in prices_df.columns:
+                    continue
+                p_s_ser = prices_to[t].dropna()
+                p_e_ser = period_prices[t].dropna()
+                if p_s_ser.empty or p_e_ser.empty:
+                    continue
+                p_s = float(p_s_ser.iloc[-1])
+                p_e = float(p_e_ser.iloc[-1])
+                if p_s > 0:
+                    ret += w * (p_e / p_s - 1.0)
+
+            cost_drag = period_cost / val if val > 0 else 0
+            val      *= (1 + ret - cost_drag)
+            prev_wts  = dict(weights)
+            val_series.append(val)
+
+        # Compute metrics for this simulation
+        vs = pd.Series(val_series)
+        r  = vs.pct_change().dropna()
+        n  = len(r)
+        if n < 3:
+            continue
+        cum  = float(vs.iloc[-1] / vs.iloc[0]) - 1.0
+        cagr = float((1 + cum) ** (PPY / n) - 1.0)
+        vol  = float(r.std() * np.sqrt(PPY))
+        shrp = (cagr - RISK_FREE_INR) / vol if vol > 0 else 0.0
+        mdd  = float(((vs - vs.cummax()) / vs.cummax()).min())
+
+        sim_rows.append({
+            "sim_id":       sim_id,
+            "cagr":         round(cagr, 6),
+            "sharpe":       round(shrp, 4),
+            "max_drawdown": round(mdd,  4),
+            "final_value":  round(float(vs.iloc[-1]), 0),
+        })
+
+    mc_df = pd.DataFrame(sim_rows)
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    mc_df.to_csv(f"{DATA_DIR}/monte_carlo_results.csv", index=False)
+
+    beats      = int((mc_df["cagr"] < our_cagr).sum())
+    p_value    = 1.0 - beats / len(mc_df)
+    pct_beats  = beats / len(mc_df) * 100
+
+    print(f"\n{'═'*65}")
+    print(f"  MONTE CARLO RESULTS")
+    print(f"{'═'*65}")
+    print(f"  Our BL+Factor CAGR        : {our_cagr:.2%}")
+    print(f"  Median random CAGR        : {mc_df['cagr'].median():.2%}")
+    print(f"  Our strategy beats        : {beats}/{len(mc_df)} random portfolios ({pct_beats:.1f}%)")
+    print(f"  p-value (fraction above)  : {p_value:.4f}")
+    if p_value < 0.05:
+        print("  ✅ Result is statistically significant (p < 0.05) — alpha is NOT due to luck")
+    else:
+        print("  ⚠️  Result is NOT statistically significant at 95% confidence")
+    print(f"\n  Saved: {DATA_DIR}/monte_carlo_results.csv")
+
+    return mc_df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     # Parse CLI flags
-    capital    = 1_000_000
-    start_date = "2019-01-01"
+    capital      = 1_000_000
+    start_date   = "2019-01-01"
+    do_montecarlo = "--montecarlo" in sys.argv
 
     for i, arg in enumerate(sys.argv[1:]):
         if arg == "--capital" and i + 2 <= len(sys.argv) - 1:
@@ -641,6 +835,10 @@ if __name__ == "__main__":
                 pass
         if arg == "--start" and i + 2 <= len(sys.argv) - 1:
             start_date = sys.argv[i + 2]
+
+    if do_montecarlo:
+        run_monte_carlo(n_simulations=500, seed=42, initial_capital=capital, start_date=start_date)
+        sys.exit(0)
 
     print(f"Starting backtest with capital=₹{capital:,}  start={start_date}")
 

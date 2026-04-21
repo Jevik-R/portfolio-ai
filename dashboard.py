@@ -153,6 +153,15 @@ def load_enhanced_backtest():
 
 
 @st.cache_data(ttl=300)
+def load_monte_carlo():
+    """Load Monte Carlo simulation results if available."""
+    p = f"{DATA_DIR}/monte_carlo_results.csv"
+    if not os.path.exists(p):
+        return None
+    return pd.read_csv(p)
+
+
+@st.cache_data(ttl=300)
 def load_prices_inr():
     """Latest NSE stock prices (already in ₹ — no FX conversion needed)."""
     p = f"{DATA_DIR}/prices.csv"
@@ -741,7 +750,7 @@ def render_macro_panel(snap: dict, sector_sentiment: dict = None, key_prefix: st
         <div style="flex:1; min-width:220px; background:white; border:1px solid #e2e8f0;
                     border-radius:12px; padding:1rem 1.2rem;">
             <div style="font-size:0.78rem; color:#64748b; font-weight:600; text-transform:uppercase;
-                        letter-spacing:0.04em; margin-bottom:0.4rem;">Market Fear Meter</div>
+                        letter-spacing:0.03em; margin-bottom:0.4rem;">Market Fear Meter</div>
             <div style="display:flex; align-items:center; gap:0.6rem;">
                 <span style="font-size:1.8rem;">{_vix_face}</span>
                 <div>
@@ -762,8 +771,8 @@ def render_macro_panel(snap: dict, sector_sentiment: dict = None, key_prefix: st
         <div style="flex:1; min-width:220px; background:white; border:1px solid #e2e8f0;
                     border-radius:12px; padding:1rem 1.2rem;">
             <div style="font-size:0.78rem; color:#64748b; font-weight:600; text-transform:uppercase;
-                        letter-spacing:0.04em; margin-bottom:0.4rem;">Your money going in</div>
-            <div style="font-size:1.8rem; font-weight:900; color:#1e293b;">{_deployed_pct}%</div>
+                        letter-spacing:0.03em; margin-bottom:0.4rem;">Your money going in</div>
+            <div style="font-size:1.8rem; font-weight:800; color:#1e293b;">{_deployed_pct}%</div>
             <div style="font-size:0.82rem; color:#64748b; margin-bottom:0.5rem;">invested in stocks</div>
             <div style="background:#f1f5f9; border-radius:6px; height:8px; overflow:hidden;">
                 <div style="background:#3b82f6; width:{_deployed_pct}%; height:100%; border-radius:6px;"></div>
@@ -892,14 +901,13 @@ def render_enhanced_backtest_tab(results_df, metrics_df, costs_df):
         """, unsafe_allow_html=True)
 
         _sc3.markdown(f"""
-        <div style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);
-                    border-radius:16px; padding:1.5rem; text-align:center; color:white;
-                    box-shadow:0 4px 16px rgba(37,99,235,0.3);">
+        <div style="background:#1e3a8a;
+                    border-radius:12px; padding:1.5rem; text-align:center; color:white;">
             <div style="font-size:1.5rem; margin-bottom:0.4rem;">🤖</div>
             <div style="font-weight:800; font-size:1.05rem; margin-bottom:0.75rem;">PortfolioAI</div>
             <div style="opacity:0.8; font-size:0.9rem;">₹1,00,000</div>
             <div style="font-size:1.4rem; opacity:0.8; margin:0.3rem 0;">↓</div>
-            <div style="font-size:1.9rem; font-weight:900;">
+            <div style="font-size:1.9rem; font-weight:800;">
                 {fmt_inr(_bl_end, compact=True)}
             </div>
             <div style="opacity:0.85; font-size:0.88rem; margin-top:0.4rem;">
@@ -908,16 +916,16 @@ def render_enhanced_backtest_tab(results_df, metrics_df, costs_df):
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.write("")
         st.markdown("**Here's how each investment grew month by month:**")
 
     st.markdown("""
     <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px;
-                padding:0.85rem 1.2rem; margin-bottom:0.75rem;">
+                padding:0.65rem 1rem; margin-bottom:0.75rem;">
         <div style="font-weight:700; color:#14532d; font-size:0.95rem; margin-bottom:0.5rem;">
             ✅ Honest Backtest — Zero Look-Ahead Bias
         </div>
-        <div style="font-size:0.82rem; color:#166534; line-height:1.75;">
+        <div style="font-size:0.79rem; color:#166534; line-height:1.75;">
             • <strong>Momentum signal:</strong> uses only prices that existed before each decision date<br>
             • <strong>Volatility signal:</strong> uses only returns that existed before each decision date<br>
             • <strong>Quality fundamentals:</strong> completely removed — no ROE/D:E/EPS in backtest<br>
@@ -952,13 +960,15 @@ def render_enhanced_backtest_tab(results_df, metrics_df, costs_df):
             <div style="color:#94a3b8; font-size:0.75rem;">like a FD giving {bl_cagr:.1%}/yr!</div>
         </div>
         """, unsafe_allow_html=True)
+        alpha_color = "#16a34a" if alpha > 0 else "#dc2626"
+        alpha_label = "above" if alpha > 0 else "below"
         _pk2.markdown(f"""
         <div class="finance-card" style="text-align:center;">
             <div style="color:#64748b; font-size:0.8rem;">Beat Nifty 50 by</div>
-            <div style="font-size:1.6rem; font-weight:800; color:{"#16a34a" if alpha>0 else "#dc2626"}; margin:0.3rem 0;">
+            <div style="font-size:1.6rem; font-weight:800; color:{alpha_color}; margin:0.3rem 0;">
                 {alpha:+.2%}/yr
             </div>
-            <div style="color:#94a3b8; font-size:0.75rem;">{"above" if alpha>0 else "below"} index after costs</div>
+            <div style="color:#94a3b8; font-size:0.75rem;">{alpha_label} index after costs</div>
         </div>
         """, unsafe_allow_html=True)
         _pk3.markdown(f"""
@@ -1151,10 +1161,10 @@ def render_portfolio_tracker():
     _today_str = _date.today().strftime("%d %b %Y")
 
     st.markdown(f"""
-    <div style="background:linear-gradient(135deg,#0f172a 0%,#1e40af 100%);
-                border-radius:16px; padding:1.5rem 2rem; margin-bottom:1.5rem; color:white;">
+    <div style="background:#0f172a;
+                border-radius:12px; padding:1rem 1.5rem; margin-bottom:1.5rem; color:white;">
         <div style="font-size:0.8rem; opacity:0.7; margin-bottom:0.3rem;">As of {_today_str}</div>
-        <h2 style="margin:0 0 0.3rem; font-size:1.5rem;">📊 My Portfolio</h2>
+        <h2 style="margin:0 0 0.3rem; font-size:1.3rem;">📊 My Portfolio</h2>
         <p style="margin:0; opacity:0.85; font-size:0.9rem;">
             Enter your holdings to see exactly how your money is performing — and what to do next.
         </p>
@@ -1263,7 +1273,7 @@ def render_portfolio_tracker():
     <div style="background:white; border:1px solid #e2e8f0; border-radius:14px;
                 padding:1.2rem 1.5rem; margin-bottom:1rem;">
         <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
-            <div style="font-size:2rem; font-weight:900; color:#1e293b;">{fmt_inr(total_val)}</div>
+            <div style="font-size:1.6rem; font-weight:800; color:#1e293b;">{fmt_inr(total_val)}</div>
             <div style="font-size:0.85rem; color:#64748b;">current value of your portfolio</div>
         </div>
         <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:0.8rem;">
@@ -1309,12 +1319,12 @@ def render_portfolio_tracker():
 
         st.markdown(f"""
         <div style="background:white; border:1px solid #e2e8f0; border-radius:10px;
-                    padding:0.75rem 1rem; margin:0.3rem 0;
+                    padding:0.6rem 0.9rem; margin:0.3rem 0;
                     display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
             <div style="display:flex; align-items:center; gap:0.7rem; min-width:200px;">
-                <div style="font-size:1.4rem;">{_meta_t.get('flag','🏢')}</div>
+                <div style="font-size:1.2rem;">{_meta_t.get('flag','🏢')}</div>
                 <div>
-                    <div style="font-weight:700; color:#1e293b; font-size:0.95rem;">{_tk}</div>
+                    <div style="font-weight:700; color:#1e293b; font-size:0.88rem;">{_tk}</div>
                     <div style="font-size:0.75rem; color:#94a3b8;">{_sec}</div>
                 </div>
             </div>
@@ -1503,16 +1513,7 @@ def render_portfolio_tracker():
                 cols_show = [c for c in cols_show if c in top15_ref.columns]
                 st.dataframe(top15_ref[cols_show], use_container_width=True, hide_index=True)
 
-    st.divider()
-    st.markdown("""
-    <div class="disclaimer">
-    ⚠️ <strong>Tracker Disclaimer:</strong>
-    P&L calculations use live NSE prices from the last downloaded prices.csv.
-    Prices update only when you re-run <code>python data_collector.py</code>.
-    This tool is for personal tracking and educational purposes only, not financial advice.
-    Consult a SEBI-registered advisor before making investment decisions.
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption("⚠️ P&L uses last downloaded prices. Not financial advice.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1525,25 +1526,15 @@ def render_financial_planner() -> None:
     step = st.session_state.get("planner_step", 1)
 
     # ── Step Indicator ────────────────────────────────────────────────────────
-    _steps = [("Your Details", 1), ("Health Score", 2), ("Risk Profile", 3), ("Your Plan", 4)]
-    _parts = []
-    for _lbl, _s in _steps:
-        if _s < step:
-            _parts.append(f'<span class="step-complete">✓ {_lbl}</span>')
-        elif _s == step:
-            _parts.append(f'<span class="step-active">● {_lbl}</span>')
-        else:
-            _parts.append(f'<span class="step-pending">○ {_lbl}</span>')
-    st.markdown(
-        '<div style="text-align:center; padding:0.75rem 0 1.5rem; font-size:0.9rem;">'
-        + '  →  '.join(_parts) + '</div>',
-        unsafe_allow_html=True,
-    )
+    _step_names = ["Your Details", "Health Score", "Risk Profile", "Your Plan"]
+    _step_label = _step_names[min(step - 1, 3)]
+    st.caption(f"Step {step} of 4 — {_step_label}")
+    st.progress(step / 4)
 
     # ── STEP 1: Conversational Input Form ────────────────────────────────────
     st.markdown("""
     <div style="text-align:center; padding:0.25rem 0 1.5rem;">
-        <h2 style="color:#1e293b; font-size:1.9rem; font-weight:800; margin:0;">
+        <h2 style="color:#1e293b; font-size:1.4rem; font-weight:800; margin:0;">
             Let's figure out your money 💰
         </h2>
         <p style="color:#64748b; font-size:1rem; max-width:480px; margin:0.6rem auto 0;">
@@ -1599,8 +1590,8 @@ def render_financial_planner() -> None:
             left_pct = left_over / income * 100
             preview_color = "#16a34a" if left_pct >= 20 else "#ea580c" if left_pct >= 5 else "#dc2626"
             st.markdown(
-                f'<div style="background:#f8fafc; border-radius:10px; padding:0.65rem 1rem; '
-                f'margin-top:0.5rem; border:1px solid #e2e8f0; font-size:0.9rem;">'
+                f'<div style="border-left:3px solid #2563eb; padding-left:0.75rem; '
+                f'margin-top:0.5rem; font-size:0.9rem;">'
                 f'You spend <strong style="color:#1e293b;">{fmt_inr(total_spend, compact=True)}/mo</strong>'
                 f' &nbsp;→&nbsp; '
                 f'<strong style="color:{preview_color};">{fmt_inr(left_over, compact=True)} left over</strong>'
@@ -1666,7 +1657,7 @@ def render_financial_planner() -> None:
         )
         st.caption(_dep_labels.get(dependents_str, ""))
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.write("")
 
     if st.button(
         "Show me my financial picture →",
@@ -1765,7 +1756,7 @@ def render_financial_planner() -> None:
     <div style="background:{_score_bg}; border-radius:20px; padding:2rem;
                 text-align:center; border:1px solid {_score_color}33; margin-bottom:1.5rem;">
         <div style="font-size:3rem; margin-bottom:0.4rem;">{_score_emoji}</div>
-        <div style="font-size:5rem; font-weight:900; color:{_score_color}; line-height:1;">{score}</div>
+        <div style="font-size:3.5rem; font-weight:800; color:{_score_color}; line-height:1;">{score}</div>
         <div style="font-size:1.1rem; color:{_score_color}; font-weight:600; margin-top:0.2rem;">
             out of 100 — {health_label.split()[0]}
         </div>
@@ -1783,7 +1774,7 @@ def render_financial_planner() -> None:
 
     _c1.markdown(f"""
     <div class="finance-card" style="text-align:center; border-top:4px solid #16a34a;">
-        <div style="font-size:1.4rem;">💵</div>
+        <div style="font-size:1.1rem;">💵</div>
         <div style="color:#64748b; font-size:0.82rem; margin:0.3rem 0;">Money left after bills</div>
         <div style="font-size:1.9rem; font-weight:800; color:#16a34a;">{fmt_inr(net_disp, compact=True)}</div>
         <div style="color:#64748b; font-size:0.78rem; margin-top:0.2rem;">every month</div>
@@ -1793,7 +1784,7 @@ def render_financial_planner() -> None:
 
     _c2.markdown(f"""
     <div class="finance-card" style="text-align:center; border-top:4px solid #2563eb;">
-        <div style="font-size:1.4rem;">🚀</div>
+        <div style="font-size:1.1rem;">🚀</div>
         <div style="color:#64748b; font-size:0.82rem; margin:0.3rem 0;">Safe to invest</div>
         <div style="font-size:1.9rem; font-weight:800; color:#2563eb;">{fmt_inr(inv_amt, compact=True)}</div>
         <div style="color:#64748b; font-size:0.78rem; margin-top:0.2rem;">per month</div>
@@ -1808,7 +1799,7 @@ def render_financial_planner() -> None:
 
     _c3.markdown(f"""
     <div class="finance-card" style="text-align:center; border-top:4px solid {_ef_color};">
-        <div style="font-size:1.4rem;">{_ef_icon}</div>
+        <div style="font-size:1.1rem;">{_ef_icon}</div>
         <div style="color:#64748b; font-size:0.82rem; margin:0.3rem 0;">Emergency fund</div>
         <div style="font-size:1.9rem; font-weight:800; color:{_ef_color};">{_ef_label}</div>
         <div style="color:#94a3b8; font-size:0.75rem; margin-top:0.4rem;">{_ef_sub}</div>
@@ -1818,13 +1809,13 @@ def render_financial_planner() -> None:
     # Friendly insights
     st.markdown("#### 💬 Your personalised insights")
     _insight_types = ["good", "warning", "great", "good", "warning"]
-    for _ii, _insight in enumerate(az.generate_insights()):
+    for _ii, _insight in enumerate(az.generate_insights()[:3]):
         st.markdown(
             f'<div class="insight-card {_insight_types[_ii % len(_insight_types)]}">💬 {_insight}</div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.write("")
     if st.button("Continue to Risk Profile →", type="primary",
                  use_container_width=True, key="fp_proceed_quiz"):
         st.session_state["planner_step"] = 3
@@ -1859,7 +1850,7 @@ def render_financial_planner() -> None:
         )
         st.progress(q_idx / len(questions))
         st.markdown(f"### {q['text']}")
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.write("")
 
         saved_idx = min(int(st.session_state.get(f"fp_q{q_idx+1}_idx", 0)), len(opt_labels) - 1)
         chosen = st.radio(
@@ -1870,7 +1861,7 @@ def render_financial_planner() -> None:
             label_visibility="collapsed",
         )
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.write("")
         btn_lbl = "Next Question →" if q_idx < len(questions) - 1 else "See My Risk Profile 🎯"
         if st.button(btn_lbl, type="primary", use_container_width=True, key=f"quiz_next_{q_idx}"):
             opt_idx = opt_labels.index(chosen)
@@ -1913,7 +1904,7 @@ def render_financial_planner() -> None:
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.write("")
         if st.button("Get My Complete Money Plan →", type="primary",
                      use_container_width=True, key="quiz_gen_plan"):
             st.balloons()
@@ -1960,7 +1951,7 @@ def render_financial_planner() -> None:
         unsafe_allow_html=True,
     )
     st.progress(rp["score"] / 20, text=f"Risk score: {rp['score']}/20")
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.write("")
 
     # Asset allocation — rupee-first cards
     st.markdown("#### Where your money goes each month")
@@ -1973,8 +1964,8 @@ def render_financial_planner() -> None:
     ]
     for _col, _icon, _name, _amt, _product, _color in _asset_cards:
         _col.markdown(f"""
-        <div class="finance-card" style="text-align:center; border-top:4px solid {_color}; min-height:175px;">
-            <div style="font-size:1.7rem;">{_icon}</div>
+        <div class="finance-card" style="text-align:center; border-top:4px solid {_color}; min-height:150px;">
+            <div style="font-size:1.3rem;">{_icon}</div>
             <div style="font-weight:700; color:#1e293b; font-size:1rem; margin:0.35rem 0;">{_name}</div>
             <div style="font-size:1.55rem; font-weight:800; color:{_color}; line-height:1.1;">
                 {fmt_inr(_amt, compact=True)}
@@ -2028,9 +2019,9 @@ def render_financial_planner() -> None:
     nse_amt = alloc["nse_stock_amount"]
 
     st.markdown(f"""
-    <div style="background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);
-                border-radius:16px; padding:1.5rem 2rem; margin:0.5rem 0; color:white;">
-        <div style="font-size:1.35rem; font-weight:800; margin-bottom:0.4rem;">
+    <div style="background:#1e3a8a;
+                border-radius:12px; padding:1.25rem 1.75rem; margin:0.5rem 0; color:white;">
+        <div style="font-size:1.2rem; font-weight:800; margin-bottom:0.4rem;">
             🤖 Let AI pick your stocks
         </div>
         <div style="opacity:0.9; margin-bottom:0.5rem; font-size:1rem;">
@@ -2113,6 +2104,371 @@ def render_financial_planner() -> None:
 #  SETUP GATE — check data availability before rendering
 # ══════════════════════════════════════════════════════════════════════════════
 
+def render_strategy_comparison():
+    """Strategy Comparison page — Monte Carlo, growth charts, rolling alpha."""
+
+    def _safe_get(row, *candidates, default=0.0):
+        """Safely get a value from a Series trying multiple candidate column names."""
+        for c in candidates:
+            if c in row.index:
+                return float(row[c])
+        return default
+
+    COLORS = {
+        "bl":     "#534AB7",   # BL+Factor (purple)
+        "mom":    "#EF9F27",   # Momentum Only (amber)
+        "eq":     "#1D9E75",   # Equal Weight (teal)
+        "nifty":  "#888780",   # Nifty 50 (gray)
+        "random": "#D3D1C7",   # Monte Carlo random avg (light gray)
+    }
+    OUR_CAGR = 0.1621          # update from latest backtest output
+
+    enh_results, enh_metrics, _ = load_enhanced_backtest()
+    mc_df = load_monte_carlo()
+
+    if enh_results is None or enh_metrics is None:
+        st.warning("Enhanced backtest data not found. Run `python3 backtester.py` first.")
+        return
+
+    # ── Extract metric rows ───────────────────────────────────────────────────
+    def _get_metrics(label_fragment):
+        row = enh_metrics[enh_metrics["label"].str.contains(label_fragment, case=False)]
+        return row.iloc[0] if not row.empty else None
+
+    m_bl    = _get_metrics("BL.*After Costs")
+    m_nifty = _get_metrics("Nifty")
+    m_eq    = _get_metrics("Equal Weight")
+    m_mom   = _get_metrics("Momentum Only")
+
+    # ── Section 1: Metric cards ───────────────────────────────────────────────
+    st.markdown("### Strategy Performance at a Glance")
+
+    bl_cagr      = _safe_get(m_bl,    "ann_return",    default=OUR_CAGR) if m_bl    is not None else OUR_CAGR
+    nifty_cagr   = _safe_get(m_nifty, "ann_return",   default=0.0)      if m_nifty is not None else 0.0
+    bl_sharpe    = _safe_get(m_bl,    "sharpe",        default=0.0)      if m_bl    is not None else 0.0
+    nifty_sharpe = _safe_get(m_nifty, "sharpe",        default=0.0)      if m_nifty is not None else 0.0
+    bl_mdd       = _safe_get(m_bl,    "max_drawdown", "mdd", default=0.0) if m_bl   is not None else 0.0
+    nifty_mdd    = _safe_get(m_nifty, "max_drawdown", "mdd", default=0.0) if m_nifty is not None else 0.0
+    bl_winrate   = _safe_get(m_bl,    "win_rate",      default=0.0)      if m_bl    is not None else 0.0
+
+    alpha = bl_cagr - nifty_cagr
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"""
+    <div style="background:white;border-radius:12px;padding:1rem 1.2rem;
+                border:1px solid #e2e8f0;border-top:4px solid {COLORS['bl']};">
+        <div style="color:#64748b;font-size:0.8rem;">CAGR vs Nifty Alpha</div>
+        <div style="font-size:1.6rem;font-weight:800;color:{COLORS['bl']};">{bl_cagr:.1%}</div>
+        <div style="color:#16a34a;font-size:0.85rem;font-weight:600;">+{alpha:.1%} alpha</div>
+    </div>
+    """, unsafe_allow_html=True)
+    c2.markdown(f"""
+    <div style="background:white;border-radius:12px;padding:1rem 1.2rem;
+                border:1px solid #e2e8f0;border-top:4px solid {COLORS['bl']};">
+        <div style="color:#64748b;font-size:0.8rem;">Sharpe vs Nifty</div>
+        <div style="font-size:1.6rem;font-weight:800;color:{COLORS['bl']};">{bl_sharpe:.2f}</div>
+        <div style="color:#64748b;font-size:0.85rem;">Nifty: {nifty_sharpe:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    c3.markdown(f"""
+    <div style="background:white;border-radius:12px;padding:1rem 1.2rem;
+                border:1px solid #e2e8f0;border-top:4px solid {COLORS['bl']};">
+        <div style="color:#64748b;font-size:0.8rem;">Max Drawdown vs Nifty</div>
+        <div style="font-size:1.6rem;font-weight:800;color:#dc2626;">{bl_mdd:.1%}</div>
+        <div style="color:#64748b;font-size:0.85rem;">Nifty: {nifty_mdd:.1%}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    c4.markdown(f"""
+    <div style="background:white;border-radius:12px;padding:1rem 1.2rem;
+                border:1px solid #e2e8f0;border-top:4px solid {COLORS['bl']};">
+        <div style="color:#64748b;font-size:0.8rem;">Win Rate (months +ve)</div>
+        <div style="font-size:1.6rem;font-weight:800;color:{COLORS['bl']};">{bl_winrate:.1%}</div>
+        <div style="color:#64748b;font-size:0.85rem;">months in profit</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.write("")
+
+    # ── Section 2: Interactive growth chart ───────────────────────────────────
+    st.markdown("### Portfolio Growth Comparison")
+
+    chart_mode = st.radio(
+        "View",
+        ["Growth (₹ value)", "Drawdown (%)", "Monthly Returns"],
+        horizontal=True,
+        key="sc_chart_mode",
+    )
+
+    # Build value series
+    # Derive initial capital from first period's val and return (avoids hardcoding)
+    _first_val = float(enh_results["val_bl_net"].iloc[0])
+    _first_ret = float(enh_results["bl_net"].iloc[0])
+    initial = _first_val / (1 + _first_ret) if (1 + _first_ret) != 0 else 1_000_000
+    val_bl    = enh_results["val_bl_net"]
+    val_mom   = enh_results["val_mom_net"] if "val_mom_net" in enh_results.columns else None
+    val_eq    = enh_results["val_eq_net"]
+    val_nifty = (1 + enh_results["nifty"]).cumprod() * initial
+
+    # CAGR labels for legend
+    def _cagr_label(series, name):
+        if series is None or series.empty:
+            return name
+        n    = len(series)
+        ppy  = 252 / 21
+        cum  = float(series.iloc[-1] / series.iloc[0]) - 1.0
+        cagr = (1 + cum) ** (ppy / n) - 1.0
+        return f"{name} ({cagr:.1%})"
+
+    lbl_bl    = _cagr_label(val_bl,    "BL+Factor")
+    lbl_mom   = _cagr_label(val_mom,   "Momentum Only") if val_mom is not None else "Momentum Only"
+    lbl_eq    = _cagr_label(val_eq,    "Equal Weight")
+    lbl_nifty = _cagr_label(val_nifty, "Nifty 50")
+
+    if chart_mode == "Growth (₹ value)":
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=enh_results.index, y=val_bl,    name=lbl_bl,    line=dict(color=COLORS["bl"],    width=2.5)))
+        if val_mom is not None:
+            fig.add_trace(go.Scatter(x=enh_results.index, y=val_mom, name=lbl_mom, line=dict(color=COLORS["mom"],   width=2)))
+        fig.add_trace(go.Scatter(x=enh_results.index, y=val_eq,    name=lbl_eq,    line=dict(color=COLORS["eq"],    width=2)))
+        fig.add_trace(go.Scatter(x=enh_results.index, y=val_nifty, name=lbl_nifty, line=dict(color=COLORS["nifty"], width=2, dash="dash")))
+        if mc_df is not None:
+            # Monte Carlo median as a "Random Avg" line approximation
+            mc_median_cagr = float(mc_df["cagr"].median())
+            n_periods = len(enh_results)
+            ppy = 252 / 21
+            mc_series = pd.Series(
+                [initial * (1 + mc_median_cagr) ** (t / ppy) for t in range(n_periods)],
+                index=enh_results.index,
+            )
+            fig.add_trace(go.Scatter(
+                x=enh_results.index, y=mc_series,
+                name=f"Random Avg ({mc_median_cagr:.1%})",
+                line=dict(color=COLORS["random"], width=1.5, dash="dot"),
+            ))
+        fig.update_layout(
+            template="plotly_white", yaxis_title="Portfolio Value (₹)",
+            yaxis_tickprefix="₹", yaxis_tickformat=",.0f",
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+            height=460, margin=dict(t=40, b=80),
+        )
+
+    elif chart_mode == "Drawdown (%)":
+        def _drawdown(s):
+            return ((s - s.cummax()) / s.cummax()) * 100
+
+        fig = go.Figure()
+        fig.add_vrect(
+            x0="2020-02-01", x1="2020-04-30",
+            fillcolor="rgba(239,68,68,0.08)", line_width=0,
+            annotation_text="COVID crash", annotation_position="top left",
+            annotation=dict(font_size=11, font_color="#ef4444"),
+        )
+        fig.add_trace(go.Scatter(x=enh_results.index, y=_drawdown(val_bl),    name=lbl_bl,    line=dict(color=COLORS["bl"],    width=2.5), fill="tozeroy", fillcolor="rgba(83,74,183,0.07)"))
+        if val_mom is not None:
+            fig.add_trace(go.Scatter(x=enh_results.index, y=_drawdown(val_mom), name=lbl_mom, line=dict(color=COLORS["mom"],   width=2)))
+        fig.add_trace(go.Scatter(x=enh_results.index, y=_drawdown(val_eq),    name=lbl_eq,    line=dict(color=COLORS["eq"],    width=2)))
+        fig.add_trace(go.Scatter(x=enh_results.index, y=_drawdown(val_nifty), name=lbl_nifty, line=dict(color=COLORS["nifty"], width=2, dash="dash")))
+        fig.update_layout(
+            template="plotly_white", yaxis_title="Drawdown (%)",
+            yaxis_ticksuffix="%",
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+            height=460, margin=dict(t=40, b=80),
+        )
+
+    else:  # Monthly Returns bar chart
+        fig = go.Figure()
+        bl_returns = enh_results["bl_net"] * 100
+        colors_bar = ["rgba(83,74,183,0.8)" if v >= 0 else "rgba(220,38,38,0.7)" for v in bl_returns]
+        fig.add_trace(go.Bar(
+            x=enh_results.index, y=bl_returns, name="BL+Factor Monthly",
+            marker_color=colors_bar,
+        ))
+        nifty_returns = enh_results["nifty"] * 100
+        fig.add_trace(go.Scatter(
+            x=enh_results.index, y=nifty_returns, name="Nifty 50",
+            line=dict(color=COLORS["nifty"], width=1.5, dash="dot"),
+        ))
+        fig.update_layout(
+            template="plotly_white", yaxis_title="Monthly Return (%)",
+            yaxis_ticksuffix="%", barmode="overlay",
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+            height=460, margin=dict(t=40, b=80),
+        )
+
+    st.plotly_chart(fig, use_container_width=True, key="sc_main_chart")
+
+    # ── Section 3: Comparison table ───────────────────────────────────────────
+    st.markdown("### Strategy Comparison Table")
+
+    def _row(m, label_override=None):
+        if m is None:
+            return None
+        lbl     = label_override or str(m["label"]).strip()
+        _cagr   = _safe_get(m, "ann_return",    default=0.0)
+        _sharpe = _safe_get(m, "sharpe",         default=0.0)
+        _mdd    = _safe_get(m, "max_drawdown", "mdd", default=0.0)
+        _calmar = _safe_get(m, "calmar",         default=0.0)
+        _wr     = _safe_get(m, "win_rate",       default=0.0)
+        _final  = _safe_get(m, "final_value",    default=0.0)
+        return {
+            "Strategy":    lbl,
+            "CAGR":        f"{_cagr:.2%}",
+            "Sharpe":      f"{_sharpe:.3f}",
+            "Max DD":      f"{_mdd:.2%}",
+            "Calmar":      f"{_calmar:.3f}",
+            "Win Rate":    f"{_wr:.1%}",
+            "Final Value": f"₹{_final:,.0f}",
+            "_cagr":       _cagr,
+            "_sharpe":     _sharpe,
+            "_mdd":        _mdd,
+            "_calmar":     _calmar,
+            "_winrate":    _wr,
+            "_final":      _final,
+        }
+
+    rows = [r for r in [
+        _row(m_bl,    "BL+Factor (After Costs)"),
+        _row(m_mom,   "Momentum Only"),
+        _row(m_eq,    "Equal Weight"),
+        _row(m_nifty, "Nifty 50"),
+    ] if r is not None]
+
+    if rows:
+        table_df = pd.DataFrame(rows)
+        display_cols = ["Strategy", "CAGR", "Sharpe", "Max DD", "Calmar", "Win Rate", "Final Value"]
+        raw_cols = {"_cagr": "CAGR", "_sharpe": "Sharpe", "_mdd": "Max DD",
+                    "_calmar": "Calmar", "_winrate": "Win Rate", "_final": "Final Value"}
+
+        # Find best per metric
+        best = {}
+        for raw, col in raw_cols.items():
+            if raw == "_mdd":
+                best[col] = table_df[raw].max()   # less negative = better
+            else:
+                best[col] = table_df[raw].max()
+        best["Max DD"] = table_df["_mdd"].max()
+
+        def highlight_row(row):
+            styles = []
+            is_bl = "BL+Factor" in str(row["Strategy"])
+            for col in display_cols:
+                style = "border-left: 3px solid #534AB7;" if (is_bl and col == "Strategy") else ""
+                # green background for best column values
+                raw_map = {"CAGR": "_cagr", "Sharpe": "_sharpe", "Max DD": "_mdd",
+                           "Calmar": "_calmar", "Win Rate": "_winrate", "Final Value": "_final"}
+                if col in raw_map:
+                    raw_key = raw_map[col]
+                    if abs(float(row[raw_key]) - best.get(col, float("nan"))) < 1e-8:
+                        style += "background-color: #d1fae5; color: #065f46; font-weight: 700;"
+                styles.append(style)
+            return styles
+
+        styled = table_df[display_cols + list(raw_cols.keys())].copy()
+        st.dataframe(
+            styled[display_cols].style.apply(
+                lambda row: highlight_row(row.to_dict() | {k: table_df.loc[row.name, k] for k in raw_cols}),
+                axis=1
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # ── Section 4: Monte Carlo significance ───────────────────────────────────
+    st.markdown("### Monte Carlo Significance Test")
+
+    if mc_df is None:
+        st.info("Run `python backtester.py --montecarlo` to generate Monte Carlo data (~3 min)")
+    else:
+        our_cagr_pct = bl_cagr * 100
+        beats    = int((mc_df["cagr"] < bl_cagr).sum())
+        p_value  = 1.0 - beats / len(mc_df)
+        pct_beat = beats / len(mc_df) * 100
+
+        # Histogram
+        mc_cagr_pct = mc_df["cagr"] * 100
+
+        bar_colors = []
+        for v in mc_cagr_pct:
+            if abs(v - our_cagr_pct) < 0.5:
+                bar_colors.append("#534AB7")
+            elif v > our_cagr_pct:
+                bar_colors.append("rgba(239,68,68,0.5)")
+            else:
+                bar_colors.append("rgba(180,178,170,0.6)")
+
+        fig_mc = go.Figure()
+        fig_mc.add_trace(go.Histogram(
+            x=mc_cagr_pct,
+            nbinsx=30,
+            name="Random portfolios",
+            marker_color="rgba(180,178,170,0.6)",
+            showlegend=False,
+        ))
+        # Overlay our strategy bar
+        fig_mc.add_vline(
+            x=our_cagr_pct,
+            line_color="#534AB7", line_width=2.5, line_dash="dash",
+            annotation_text=f"BL+Factor ({our_cagr_pct:.1f}%)",
+            annotation_position="top right",
+            annotation=dict(font_color="#534AB7", font_size=13),
+        )
+        fig_mc.update_layout(
+            template="plotly_white",
+            xaxis_title="CAGR (%)",
+            yaxis_title="Number of portfolios",
+            height=350,
+            margin=dict(t=30, b=20),
+        )
+        st.plotly_chart(fig_mc, use_container_width=True, key="sc_mc_hist")
+
+        st.markdown(f"""
+        <div style="text-align:center; padding:1rem 0;">
+            <div style="font-size:1.4rem; font-weight:800; color:#1e293b;">
+                Our strategy beats <span style="color:#534AB7;">{pct_beat:.0f}%</span>
+                of {len(mc_df)} random portfolios &nbsp;
+                <span style="color:#64748b; font-size:1rem;">(p = {p_value:.3f})</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.caption(
+            "Each random portfolio picks 15 stocks at random each month from the same NSE universe "
+            "with the same transaction costs. This test proves our alpha is not due to luck."
+        )
+
+    # ── Section 5: Rolling 12-month alpha ─────────────────────────────────────
+    st.markdown("### Rolling 12-month Alpha over Nifty 50")
+
+    if "val_bl_net" in enh_results.columns:
+        bl_ret_s    = enh_results["bl_net"].fillna(0)
+        nifty_ret_s = enh_results["nifty"].fillna(0)
+
+        roll_bl    = (1 + bl_ret_s).rolling(12).apply(lambda x: x.prod(), raw=True) - 1
+        roll_nifty = (1 + nifty_ret_s).rolling(12).apply(lambda x: x.prod(), raw=True) - 1
+        roll_alpha = (roll_bl - roll_nifty) * 100
+
+        roll_alpha = roll_alpha.dropna()
+        colors_alpha = ["rgba(29,158,117,0.8)" if v >= 0 else "rgba(239,68,68,0.7)" for v in roll_alpha]
+
+        fig_alpha = go.Figure()
+        fig_alpha.add_hline(y=0, line_color="#94a3b8", line_width=1)
+        fig_alpha.add_trace(go.Bar(
+            x=roll_alpha.index,
+            y=roll_alpha.values,
+            marker_color=colors_alpha,
+            name="Rolling 12m alpha",
+        ))
+        fig_alpha.update_layout(
+            template="plotly_white",
+            title="Rolling 12-month alpha over Nifty 50",
+            yaxis_title="Alpha (%)",
+            yaxis_ticksuffix="%",
+            showlegend=False,
+            height=350,
+            margin=dict(t=50, b=20),
+        )
+        st.plotly_chart(fig_alpha, use_container_width=True, key="sc_alpha_chart")
+
+
 def render_setup_gate(data_status):
     st.error("⚠️  Some required data files are missing. Please run the setup pipeline first.")
     st.markdown("### Setup Pipeline")
@@ -2154,22 +2510,25 @@ def main():
     st.markdown("""
     <style>
     /* ── Base ── */
-    .main { background: #f8fafc; }
+    .main { background: #f8fafc; font-family: 'Inter', -apple-system, sans-serif; }
     header { visibility: hidden; }
     [data-testid="stSidebar"] {
         background: #ffffff !important;
         border-right: 1px solid #e2e8f0;
     }
+    [data-testid="stSidebarContent"] { padding: 0.5rem 0.75rem; }
 
     /* ── Finance Cards ── */
     .finance-card {
         background: white;
-        border-radius: 16px;
-        padding: 1.5rem;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        border-radius: 12px;
+        padding: 1.25rem;
         margin-bottom: 1rem;
         border: 1px solid #e2e8f0;
     }
+
+    /* ── Headings ── */
+    h4 { font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
 
     /* ── Big Numbers ── */
     .big-number {
@@ -2209,13 +2568,23 @@ def main():
         border-radius: 0 12px 12px 0;
         padding: 1rem 1.2rem;
         margin: 0.5rem 0;
-        font-size: 1rem;
+        font-size: 0.88rem;
         color: #0c4a6e;
-        line-height: 1.5;
+        line-height: 1.6;
     }
     .insight-card.good    { background:#f0fdf4; border-left-color:#16a34a; color:#14532d; }
     .insight-card.warning { background:#fffbeb; border-left-color:#f59e0b; color:#78350f; }
     .insight-card.great   { background:#fdf4ff; border-left-color:#a855f7; color:#581c87; }
+
+    /* ── Metric delta hidden ── */
+    .metric-container [data-testid="stMetricDelta"] { display: none; }
+
+    /* ── Tabs ── */
+    .stTabs [data-baseweb="tab"] { color: #64748b; }
+    .stTabs [aria-selected="true"] {
+        border-bottom: 2px solid #2563eb !important;
+        color: #2563eb !important;
+    }
 
     /* ── Quiz Radio as Cards ── */
     div[data-testid="stRadio"] label {
@@ -2224,7 +2593,7 @@ def main():
         background: white !important;
         border: 2px solid #e2e8f0 !important;
         border-radius: 12px !important;
-        padding: 0.9rem 1.2rem !important;
+        padding: 0.65rem 1rem !important;
         margin: 0.4rem 0 !important;
         cursor: pointer !important;
         transition: border-color 0.15s, background 0.15s !important;
@@ -2236,7 +2605,6 @@ def main():
     div[data-testid="stRadio"] label:has(input:checked) {
         border-color: #2563eb !important;
         background: #eff6ff !important;
-        box-shadow: 0 0 0 3px rgba(37,99,235,0.12) !important;
     }
 
     /* ── Sidebar Nav Radio as Cards ── */
@@ -2244,9 +2612,9 @@ def main():
         background: #f8fafc !important;
         border: 1px solid #e2e8f0 !important;
         border-radius: 10px !important;
-        padding: 0.65rem 0.9rem !important;
+        padding: 0.5rem 0.8rem !important;
         margin: 0.2rem 0 !important;
-        font-size: 0.93rem !important;
+        font-size: 0.88rem !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {
         border-color: #2563eb !important;
@@ -2294,16 +2662,16 @@ def main():
     with st.sidebar:
         # Logo & tagline
         st.markdown("""
-        <div style="padding: 0.6rem 0 0.8rem;">
-            <div style="font-size:1.45rem; font-weight:900; color:#1e293b; letter-spacing:-0.5px;">
+        <div style="padding: 0.4rem 0 0.5rem;">
+            <div style="font-size:1.3rem; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">
                 📊 PortfolioAI
             </div>
             <div style="color:#64748b; font-size:0.82rem; margin-top:3px;">
                 Your AI money manager
             </div>
         </div>
+        <div style="border-top:1px solid #f1f5f9; margin:0.4rem 0 0.5rem;"></div>
         """, unsafe_allow_html=True)
-        st.divider()
 
         # Navigation — styled radio buttons (CSS makes them look like cards)
         mode = st.radio(
@@ -2313,33 +2681,27 @@ def main():
                 "📈 Invest Now",
                 "🔄 Rebalance",
                 "📊 My Performance",
+                "🔬 Strategy Comparison",
             ],
-            index={"planner": 0, "fresh": 1, "rebalance": 2, "tracker": 3}.get(
+            index={"planner": 0, "fresh": 1, "rebalance": 2, "tracker": 3, "comparison": 4}.get(
                 st.session_state.mode, 0
             ),
             label_visibility="collapsed",
         )
 
         _mode_map = {
-            "💰 Plan My Finances": "planner",
-            "📈 Invest Now":       "fresh",
-            "🔄 Rebalance":       "rebalance",
-            "📊 My Performance":  "tracker",
+            "💰 Plan My Finances":  "planner",
+            "📈 Invest Now":        "fresh",
+            "🔄 Rebalance":        "rebalance",
+            "📊 My Performance":   "tracker",
+            "🔬 Strategy Comparison": "comparison",
         }
         st.session_state.mode = _mode_map.get(mode, "planner")
-
-        _mode_subtitles = {
-            "💰 Plan My Finances": "Figure out how much to invest · 5 mins",
-            "📈 Invest Now":       "AI picks the best stocks for you",
-            "🔄 Rebalance":       "Adjust your existing holdings",
-            "📊 My Performance":  "See your profit/loss and what to do next",
-        }
-        st.caption(_mode_subtitles.get(mode, ""))
 
         st.divider()
 
         risk_profile = st.select_slider(
-            "**How do you feel about risk?**",
+            "Risk tolerance",
             options=["conservative", "moderate", "aggressive"],
             value="moderate",
             help="Conservative = play it safe. Moderate = balanced. Aggressive = go for higher returns, accept more ups and downs.",
@@ -2372,13 +2734,6 @@ def main():
             ),
         )
         st.session_state.analysis_method = analysis_method
-
-        _am_desc = {
-            "llm":       "LLaMA analyses recent price patterns to predict returns. Fast and reliable.",
-            "sentiment": "FinBERT reads recent news headlines for each stock. Needs sentiment data file.",
-            "combined":  "Both signals combined. Best accuracy but takes slightly longer.",
-        }
-        st.caption(_am_desc[analysis_method])
 
         # ── Refresh data pipeline button ──────────────────────────────────────
         if st.button("🔄 Refresh Data", use_container_width=True,
@@ -2445,6 +2800,15 @@ def main():
 
         st.divider()
 
+        # Data file status
+        data_status = check_data_files()
+        with st.expander("📁 Data Files"):
+            for fname, exists in {**data_status["required"], **data_status["optional"]}.items():
+                dot = "🟢" if exists else "🔴"
+                st.markdown(f"{dot} {fname}")
+            if not data_status["required_ok"]:
+                st.error("Run setup pipeline — see main page")
+
         # ── Advanced / optional ───────────────────────────────────────────────
         with st.expander("🔑 GPT-3.5 Rationale (optional)"):
             use_openai = st.toggle("Use GPT-3.5 for explanations", value=False)
@@ -2453,15 +2817,7 @@ def main():
                 openai_key = st.text_input("OpenAI API Key", type="password")
                 st.caption("Used only for generating natural language rationale.")
 
-        st.divider()
-
-        # Data file status
-        data_status = check_data_files()
-        with st.expander("📁 Data Files"):
-            for fname, exists in {**data_status["required"], **data_status["optional"]}.items():
-                st.markdown(f"{'✅' if exists else '❌'} `{fname}`")
-            if not data_status["required_ok"]:
-                st.error("Run setup pipeline — see main page")
+        st.caption("PortfolioAI v1.0 · NSE India")
 
     # ── MAIN AREA ─────────────────────────────────────────────────────────────
     sentiment_df        = load_sentiment_df()
@@ -2484,6 +2840,14 @@ def main():
             "PortfolioAI | Personal Finance Planner + AI-powered NSE Portfolio Optimisation | "
             "For Indian retail investors"
         )
+        return
+
+    # Strategy Comparison page — does not need trading data files
+    if st.session_state.mode == "comparison":
+        st.markdown("## 🔬 Strategy Comparison")
+        st.caption("How our BL+Factor strategy stacks up against alternatives and random chance.")
+        st.divider()
+        render_strategy_comparison()
         return
 
     if not data_status["required_ok"]:
@@ -2512,43 +2876,18 @@ def main():
         # Welcome message — different tone if coming from planner
         _planned = float(st.session_state.get("planned_investment", 0.0))
         if _planned > 0:
-            st.markdown(f"""
-            <div style="text-align:center; padding:0.5rem 0 1rem;">
-                <h2 style="color:#1e293b; font-weight:800; margin:0;">
-                    Perfect! Let's put your {fmt_inr(investment_inr, compact=True)} to work 🚀
-                </h2>
-                <p style="color:#64748b; margin:0.5rem 0 0;">
-                    Our AI is about to analyse NSE stocks and build your personalised portfolio
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"### AI Stock Portfolio — {fmt_inr(investment_inr, compact=True)} 🚀")
         else:
-            st.markdown(f"""
-            <div style="text-align:center; padding:0.5rem 0 1rem;">
-                <h2 style="color:#1e293b; font-weight:800; margin:0;">
-                    AI Stock Portfolio — {fmt_inr(investment_inr)} 📈
-                </h2>
-                <p style="color:#64748b; margin:0.5rem 0 0;">
-                    Set your amount in the sidebar, then let AI build your portfolio
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"### AI Stock Portfolio — {fmt_inr(investment_inr)}")
 
         # What happens explanation + button
-        st.markdown("""
-        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px;
-                    padding:1.2rem 1.5rem; margin-bottom:1rem;">
-            <div style="font-weight:700; color:#1e293b; margin-bottom:0.6rem;">
-                🧠 What happens when you click:
-            </div>
-            <div style="color:#64748b; font-size:0.9rem; line-height:1.9;">
-                📰 &nbsp;AI reads the latest news for every stock on the list<br>
-                📊 &nbsp;Checks which stocks look strong right now<br>
-                🎯 &nbsp;Figures out the best mix for your risk level<br>
-                ✅ &nbsp;Gives you a ready-to-execute plan with exact rupee amounts
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info(
+            "**🧠 What happens when you click:**\n\n"
+            "📰 AI reads the latest news for every stock on the list\n\n"
+            "📊 Checks which stocks look strong right now\n\n"
+            "🎯 Figures out the best mix for your risk level\n\n"
+            "✅ Gives you a ready-to-execute plan with exact rupee amounts"
+        )
 
         if st.button("🚀 Start AI Analysis →", type="primary", use_container_width=True):
             _am = st.session_state.get("analysis_method", "llm")
@@ -2642,7 +2981,7 @@ def main():
             # ── Tabs ──────────────────────────────────────────────────────────
             t1, t2, t_factor, t3, t4, t5, t6 = st.tabs([
                 "📊 Allocation", "🤖 AI Analysis", "📐 Stock Scorecard",
-                "📉 Past Performance", "💡 Why these stocks?", "🌍 Market Conditions", "🔢 Details",
+                "📉 Past Performance", "💡 Why these stocks?", "🌍 Market Conditions", "📋 Summary",
             ])
 
             with t1:
@@ -2673,18 +3012,9 @@ def main():
                     }.get(_sent, "➡️ Neutral")
 
                     _col_a, _col_b, _col_c, _col_d, _col_e = st.columns([3, 2, 1.5, 1.5, 1.5])
-                    _col_a.markdown(f"""
-                    <div style="border-left:4px solid {_border_color}; padding:0.7rem 1rem;
-                                background:white; border-radius:0 10px 10px 0; margin:0.25rem 0;
-                                box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-                        <div style="font-size:0.97rem; font-weight:700; color:#1e293b;">
-                            {_meta.get("flag","📈")} {_meta.get("name", _t)}
-                        </div>
-                        <div style="color:#64748b; font-size:0.8rem; margin-top:1px;">
-                            {_meta.get("sector","")} &nbsp;·&nbsp; {_t.replace(".NS","")}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    with _col_a:
+                        st.markdown(f"**{_meta.get('flag','📈')} {_meta.get('name', _t)}**")
+                        st.caption(f"{_meta.get('sector','')} · {_t.replace('.NS','')}")
                     _col_b.metric("Buy", fmt_inr(_row["invested_inr"]))
                     _col_c.metric("Shares", f"~{_row['shares']:.1f}")
                     _col_d.metric("Weight", f"{_row['target_weight']:.1%}")
@@ -2732,14 +3062,7 @@ def main():
                     })
                 st.dataframe(pd.DataFrame(display), use_container_width=True, hide_index=True)
 
-                st.markdown(
-                    f'<div class="insight-card good">'
-                    f'💡 Place buy orders for <strong>{fmt_inr(summary["total_deployed_inr"])}</strong> '
-                    f'through your broker (Zerodha, Groww, Angel One, etc.) on the NSE. '
-                    f'All prices are in ₹ — no conversion needed.'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                st.success("Place buy orders through your broker on the NSE.")
 
             with t2:
                 st.markdown("""
@@ -2819,7 +3142,7 @@ def main():
 
                         st.markdown(f"""
                         <div style="background:white; border:1px solid #e2e8f0; border-left:4px solid {_sig_color};
-                                    border-radius:10px; padding:0.85rem 1.1rem; margin:0.4rem 0;
+                                    border-radius:10px; padding:0.65rem 0.9rem; margin:0.4rem 0;
                                     display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
                             <div style="min-width:160px;">
                                 <div style="font-size:1rem; font-weight:700; color:#1e293b;">
@@ -3017,7 +3340,7 @@ def main():
                     ):
                         st.markdown(f"""
                         <div style="border-left:4px solid {_border_c}; padding:0.8rem 1.1rem;
-                                    background:#f8fafc; border-radius:0 8px 8px 0; margin-bottom:0.8rem;">
+                                    background:#f0f9ff; border-radius:0 8px 8px 0; margin-bottom:0.8rem;">
                             {_chk1}<br>{_chk2}<br>{_chk3}
                             <div style="margin-top:0.6rem; color:#64748b; font-size:0.82rem;">{_edge_text}</div>
                         </div>
@@ -3153,11 +3476,7 @@ def main():
             return
         render_portfolio_tracker()
         # Disclaimer already rendered inside render_portfolio_tracker
-        st.caption(
-            "PortfolioAI | Black-Litterman + LLaMA Views + Factor Scoring | "
-            "16 NSE Equities | Macro Regime Overlay | Vol Targeting + Drawdown Control | "
-            "Built for BTech Minor Project 2024–25"
-        )
+        st.caption("PortfolioAI · Built for BTech Minor Project 2024–25 · NSE India")
         return
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -3165,10 +3484,10 @@ def main():
     # ══════════════════════════════════════════════════════════════════════════
     else:
         st.markdown("""
-        <div style="background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 100%);
-                    border-radius:16px; padding:1.5rem 2rem; margin-bottom:1.5rem; color:white;">
-            <h2 style="margin:0 0 0.3rem; font-size:1.5rem;">Time to rebalance? Let's check 📊</h2>
-            <p style="margin:0; opacity:0.85; font-size:0.95rem;">
+        <div style="background:#1e40af;
+                    border-radius:12px; padding:1rem 1.5rem; margin-bottom:1.5rem; color:white;">
+            <h2 style="margin:0 0 0.3rem; font-size:1.3rem;">Time to rebalance? Let's check 📊</h2>
+            <p style="margin:0; opacity:0.85; font-size:0.9rem;">
                 Tell us what you currently hold. We'll tell you exactly what to buy, sell, or keep —
                 so your money stays optimally invested.
             </p>
@@ -3177,7 +3496,7 @@ def main():
 
         # ── Holdings input table ──────────────────────────────────────────────
         st.markdown("#### Step 1 — What do you currently hold?")
-        st.caption("Enter the ₹ value of each stock you hold today. Leave 0 if you don't own it.")
+        st.caption("Tip: Only fill in stocks you currently hold. Leave others at 0.")
 
         # Build default table
         if prices_inr is not None:
@@ -3227,23 +3546,23 @@ def main():
         <div style="display:flex; gap:0.8rem; flex-wrap:wrap; margin:0.8rem 0 1rem;">
             <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
                         border-top:3px solid #3b82f6; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.04em;">You hold today</div>
+                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">You hold today</div>
                 <div style="font-size:1.4rem; font-weight:800; color:#1e293b; margin:0.2rem 0;">{fmt_inr(total_current, compact=True)}</div>
             </div>
             <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
                         border-top:3px solid #16a34a; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.04em;">Adding now</div>
+                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">Adding now</div>
                 <div style="font-size:1.4rem; font-weight:800; color:#16a34a; margin:0.2rem 0;">{fmt_inr(additional_inr, compact=True)}</div>
             </div>
             <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
                         border-top:3px solid #6366f1; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.04em;">Total to work with</div>
+                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">Total to work with</div>
                 <div style="font-size:1.4rem; font-weight:800; color:#6366f1; margin:0.2rem 0;">{fmt_inr(total_capital, compact=True)}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("---")
+        st.divider()
 
         if st.button("📊 Generate My Rebalancing Plan", type="primary",
                      use_container_width=True,
@@ -3304,34 +3623,11 @@ def main():
             sells = rebal[rebal["action"] == "SELL"]
             holds = rebal[rebal["action"] == "HOLD"]
 
-            st.markdown(f"""
-            <div style="display:flex; gap:0.8rem; flex-wrap:wrap; margin:0.5rem 0 1rem;">
-                <div style="flex:1; min-width:150px; background:#f0fdf4; border:1px solid #bbf7d0;
-                            border-left:4px solid #16a34a; border-radius:10px; padding:0.8rem 1rem;">
-                    <div style="font-size:0.75rem; color:#16a34a; font-weight:700; text-transform:uppercase;">Buy</div>
-                    <div style="font-size:1.5rem; font-weight:900; color:#1e293b;">{len(buys)} stocks</div>
-                    <div style="font-size:0.82rem; color:#16a34a; font-weight:600;">{fmt_inr(summary['buys_inr'], compact=True)} to invest</div>
-                </div>
-                <div style="flex:1; min-width:150px; background:#fef2f2; border:1px solid #fecaca;
-                            border-left:4px solid #dc2626; border-radius:10px; padding:0.8rem 1rem;">
-                    <div style="font-size:0.75rem; color:#dc2626; font-weight:700; text-transform:uppercase;">Sell</div>
-                    <div style="font-size:1.5rem; font-weight:900; color:#1e293b;">{len(sells)} stocks</div>
-                    <div style="font-size:0.82rem; color:#dc2626; font-weight:600;">{fmt_inr(summary['sells_inr'], compact=True)} to free up</div>
-                </div>
-                <div style="flex:1; min-width:150px; background:#f8fafc; border:1px solid #e2e8f0;
-                            border-left:4px solid #64748b; border-radius:10px; padding:0.8rem 1rem;">
-                    <div style="font-size:0.75rem; color:#64748b; font-weight:700; text-transform:uppercase;">Hold</div>
-                    <div style="font-size:1.5rem; font-weight:900; color:#1e293b;">{len(holds)} stocks</div>
-                    <div style="font-size:0.82rem; color:#64748b;">no action needed</div>
-                </div>
-                <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
-                            border-left:4px solid #f59e0b; border-radius:10px; padding:0.8rem 1rem;">
-                    <div style="font-size:0.75rem; color:#92400e; font-weight:700; text-transform:uppercase;">Brokerage Cost</div>
-                    <div style="font-size:1.5rem; font-weight:900; color:#1e293b;">{fmt_inr(summary['transaction_cost_inr'], compact=True)}</div>
-                    <div style="font-size:0.82rem; color:#92400e;">est. Zerodha fees</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            _kpi1, _kpi2, _kpi3, _kpi4 = st.columns(4)
+            _kpi1.metric("Buy", f"{len(buys)} stocks", fmt_inr(summary['buys_inr'], compact=True))
+            _kpi2.metric("Sell", f"{len(sells)} stocks", fmt_inr(summary['sells_inr'], compact=True))
+            _kpi3.metric("Hold", f"{len(holds)} stocks")
+            _kpi4.metric("Brokerage Cost", fmt_inr(summary['transaction_cost_inr'], compact=True))
 
             rb1, rb2, rb3, rb_factor, rb4, rb5 = st.tabs([
                 "📋 Rebalancing Plan", "📊 Portfolio View",
@@ -3390,7 +3686,7 @@ def main():
                     <div style="font-weight:700; color:#1e293b; margin-bottom:0.6rem; font-size:0.95rem;">
                         💸 Where the money goes
                     </div>
-                    <div style="display:flex; flex-direction:column; gap:0.4rem; font-size:0.88rem;">
+                    <div style="display:flex; flex-direction:column; gap:0.3rem; font-size:0.83rem;">
                         <div style="display:flex; justify-content:space-between;">
                             <span style="color:#64748b;">Money you'll get from selling</span>
                             <span style="font-weight:700; color:#16a34a;">{fmt_inr(summary['sells_inr'])}</span>
@@ -3490,7 +3786,7 @@ def main():
 
                         st.markdown(f"""
                         <div style="background:white; border:1px solid #e2e8f0; border-left:4px solid {_sig_color};
-                                    border-radius:10px; padding:0.85rem 1.1rem; margin:0.4rem 0;
+                                    border-radius:10px; padding:0.65rem 0.9rem; margin:0.4rem 0;
                                     display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
                             <div style="min-width:160px;">
                                 <div style="font-size:1rem; font-weight:700; color:#1e293b;">
@@ -3670,11 +3966,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    st.caption(
-        "PortfolioAI | Black-Litterman + LLaMA Views + Factor Scoring | "
-        "Nifty 100 Universe | Macro Regime Overlay | Vol Targeting + Drawdown Control | "
-        "For Indian retail investors (₹50K–₹10L)"
-    )
+    st.caption("PortfolioAI · Built for BTech Minor Project 2024–25 · NSE India")
 
 
 if __name__ == "__main__":
