@@ -2019,26 +2019,25 @@ def render_financial_planner() -> None:
     nse_amt = alloc["nse_stock_amount"]
 
     st.markdown(f"""
-    <div style="background:#1e3a8a;
-                border-radius:12px; padding:1.25rem 1.75rem; margin:0.5rem 0; color:white;">
-        <div style="font-size:1.2rem; font-weight:800; margin-bottom:0.4rem;">
-            🤖 Let AI pick your stocks
+    <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-left:4px solid #16a34a;
+                border-radius:0 12px 12px 0; padding:1rem 1.25rem; margin-bottom:1rem;">
+        <div style="font-weight:700; color:#14532d; font-size:0.95rem; margin-bottom:0.25rem;">
+            Your plan is complete ✅
         </div>
-        <div style="opacity:0.9; margin-bottom:0.5rem; font-size:1rem;">
-            Your stock budget: <strong>{fmt_inr(nse_amt)}/month</strong>
+        <div style="color:#166534; font-size:0.85rem;">
+            Monthly stock budget: <strong>{fmt_inr(nse_amt)}</strong>
+            · Risk profile: <strong>{alloc["risk_label"]}</strong>
         </div>
-        <div style="opacity:0.75; font-size:0.88rem;">
-            Our AI will analyse all NSE stocks and tell you exactly what to buy this month.
+        <div style="color:#166534; font-size:0.82rem; margin-top:0.3rem; opacity:0.85;">
+            Click below — AI will build your personalised NSE portfolio instantly.
         </div>
     </div>
     """, unsafe_allow_html=True)
-
-    if st.button(
-        "🚀 Pick My Stocks with AI →",
-        type="primary", use_container_width=True, key="fp_connect_btn",
-    ):
+    if st.button("🚀 Build My Stock Portfolio →", type="primary", use_container_width=True, key="fp_connect_btn"):
         st.session_state.planned_investment = nse_amt
+        st.session_state.risk_profile_from_planner = alloc["risk_label"].lower()
         st.session_state.mode = "fresh"
+        st.session_state.result = None
         st.rerun()
 
     # Download summary
@@ -2654,169 +2653,122 @@ def main():
         ("planner_step",       1),
         ("planned_investment", 0.0),
         ("quiz_q_index",       0),          # tracks current quiz question (0-4, 5=done)
+        ("risk_profile_from_planner", "moderate"),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
+    investment_inr = 0
+    risk_profile = "moderate"
+    analysis_method = "llm"
+    use_openai = False
+    openai_key = ""
+
     with st.sidebar:
-        # Logo & tagline
+        # Logo
         st.markdown("""
-        <div style="padding: 0.4rem 0 0.5rem;">
+        <div style="padding: 0.5rem 0 0.3rem;">
             <div style="font-size:1.3rem; font-weight:800; color:#1e293b; letter-spacing:-0.5px;">
                 📊 PortfolioAI
             </div>
-            <div style="color:#64748b; font-size:0.82rem; margin-top:3px;">
-                Your AI money manager
+            <div style="color:#94a3b8; font-size:0.78rem; margin-top:2px;">
+                AI-powered NSE portfolio
             </div>
         </div>
-        <div style="border-top:1px solid #f1f5f9; margin:0.4rem 0 0.5rem;"></div>
         """, unsafe_allow_html=True)
+        st.divider()
 
-        # Navigation — styled radio buttons (CSS makes them look like cards)
+        # Navigation — 3 options only
         mode = st.radio(
             "Navigate",
-            options=[
-                "💰 Plan My Finances",
-                "📈 Invest Now",
-                "🔄 Rebalance",
-                "📊 My Performance",
-                "🔬 Strategy Comparison",
-            ],
-            index={"planner": 0, "fresh": 1, "rebalance": 2, "tracker": 3, "comparison": 4}.get(
-                st.session_state.mode, 0
-            ),
+            options=["💰 Plan My Finances", "📈 Invest Now", "🔬 Strategy Comparison"],
+            index={"planner": 0, "fresh": 1, "comparison": 2}.get(st.session_state.mode, 0),
             label_visibility="collapsed",
         )
-
         _mode_map = {
-            "💰 Plan My Finances":  "planner",
-            "📈 Invest Now":        "fresh",
-            "🔄 Rebalance":        "rebalance",
-            "📊 My Performance":   "tracker",
+            "💰 Plan My Finances":    "planner",
+            "📈 Invest Now":          "fresh",
             "🔬 Strategy Comparison": "comparison",
         }
         st.session_state.mode = _mode_map.get(mode, "planner")
 
         st.divider()
 
-        risk_profile = st.select_slider(
-            "Risk tolerance",
-            options=["conservative", "moderate", "aggressive"],
-            value="moderate",
-            help="Conservative = play it safe. Moderate = balanced. Aggressive = go for higher returns, accept more ups and downs.",
-        )
+        # Show risk + amount + AI method ONLY on Invest Now
+        analysis_method = st.session_state.get("analysis_method", "llm")
 
-        risk_desc = {
-            "conservative": "🛡️ Play it safe — steady, lower returns, fewer surprises",
-            "moderate":     "⚖️ Balanced — good returns without too many sleepless nights",
-            "aggressive":   "🚀 Go big — higher potential, but bigger swings too",
-        }
-        st.caption(risk_desc[risk_profile])
+        if st.session_state.mode == "fresh":
+            risk_profile = st.select_slider(
+                "Risk tolerance",
+                options=["conservative", "moderate", "aggressive"],
+                value=st.session_state.get("risk_profile_from_planner", "moderate"),
+            )
+            risk_desc = {
+                "conservative": "🛡️ Lower risk, steadier returns",
+                "moderate":     "⚖️ Balanced risk and return",
+                "aggressive":   "🚀 Higher risk, higher potential",
+            }
+            st.caption(risk_desc[risk_profile])
 
-        st.divider()
+            st.write("")
 
-        # ── AI Analysis Method selector ───────────────────────────────────────
-        st.markdown("**🧠 AI Analysis Method**")
-        analysis_method = st.selectbox(
-            label="Choose method",
-            options=["llm", "sentiment", "combined"],
-            format_func=lambda x: {
-                "llm":       "🚀 LLM Views — Fast (Groq/LLaMA)",
-                "sentiment": "📰 News Sentiment (FinBERT)",
-                "combined":  "🔥 Combined — Best Results",
-            }[x],
-            index=0,
-            help=(
-                "LLM Views uses recent price data. "
-                "News Sentiment uses headlines. "
-                "Combined uses both for best accuracy."
-            ),
-        )
-        st.session_state.analysis_method = analysis_method
-
-        # ── Refresh data pipeline button ──────────────────────────────────────
-        if st.button("🔄 Refresh Data", use_container_width=True,
-                     help="Re-download prices and regenerate AI views for the selected method"):
-            run_full_pipeline(analysis_method)
-            st.cache_data.clear()
-            st.rerun()
-
-        st.divider()
-
-        # ── Mode-specific inputs ──────────────────────────────────────────────
-        if st.session_state.mode == "planner":
-            st.markdown("**💰 Financial Planner**")
-            st.caption("Complete your financial profile to get a personalised investment plan.")
-            investment_inr = 0
-
-        elif st.session_state.mode == "fresh":
-            st.markdown("**💰 Investment Amount**")
-
-            # Pre-fill from Financial Planner if user came via the connect button
+            # Investment amount
             planned = float(st.session_state.get("planned_investment", 0.0))
             if planned > 0:
-                st.success(f"💰 Amount from your financial plan")
+                st.success(f"From your plan: {fmt_inr(planned)}")
                 investment_inr = planned
-                st.metric("Investment Amount", fmt_inr(investment_inr))
                 if st.button("✏️ Change amount", key="fp_clear_planned"):
                     st.session_state.planned_investment = 0.0
                     st.rerun()
             else:
-                inv_preset = st.selectbox(
-                    "Quick select",
-                    ["₹25,000", "₹50,000", "₹1,00,000", "₹2,50,000", "₹5,00,000", "Custom"],
+                inv_preset = st.radio(
+                    "Investment amount",
+                    options=["₹25K", "₹50K", "₹1L", "₹2.5L", "₹5L", "Custom"],
                     index=2,
+                    horizontal=True,
                 )
                 preset_map = {
-                    "₹25,000": 25_000, "₹50,000": 50_000,
-                    "₹1,00,000": 100_000, "₹2,50,000": 250_000,
-                    "₹5,00,000": 500_000,
+                    "₹25K": 25_000, "₹50K": 50_000, "₹1L": 100_000,
+                    "₹2.5L": 250_000, "₹5L": 500_000,
                 }
                 if inv_preset == "Custom":
                     investment_inr = st.number_input(
                         "Enter amount (₹)", min_value=5000, max_value=50_000_000,
-                        value=100_000, step=5000,
+                        value=100_000, step=5000, label_visibility="collapsed",
                     )
                 else:
                     investment_inr = preset_map[inv_preset]
-                st.metric("Investment Amount", fmt_inr(investment_inr))
+                st.metric("Investing", fmt_inr(investment_inr))
 
-        elif st.session_state.mode == "tracker":
-            st.markdown("**📊 Portfolio Tracker**")
-            st.caption("Enter your holdings on the main page to see real P&L and next-month action signals.")
-            investment_inr = 0
-            additional_inr = 0
+            st.write("")
 
-        else:  # rebalance
-            st.markdown("**🔄 Enter Current Holdings**")
-            st.caption("Enter your current portfolio values in ₹")
-            investment_inr = 0
-            additional_inr = st.number_input(
-                "Additional investment (₹)", min_value=0,
-                value=0, step=5000,
-                help="Extra money to add alongside rebalancing",
+            analysis_method = st.selectbox(
+                "AI method",
+                options=["llm", "sentiment", "combined"],
+                format_func=lambda x: {
+                    "llm":       "🚀 LLM (Fast)",
+                    "sentiment": "📰 News Sentiment",
+                    "combined":  "🔥 Combined (Best)",
+                }[x],
+                index=0,
             )
+            st.session_state.analysis_method = analysis_method
+
+            if st.button("🔄 Refresh Data", use_container_width=True):
+                run_full_pipeline(analysis_method)
+                st.cache_data.clear()
+                st.rerun()
 
         st.divider()
 
-        # Data file status
+        # Data status — compact
         data_status = check_data_files()
-        with st.expander("📁 Data Files"):
+        with st.expander("📁 Data status"):
             for fname, exists in {**data_status["required"], **data_status["optional"]}.items():
-                dot = "🟢" if exists else "🔴"
-                st.markdown(f"{dot} {fname}")
-            if not data_status["required_ok"]:
-                st.error("Run setup pipeline — see main page")
+                st.markdown(f"{'🟢' if exists else '🔴'} {fname}")
 
-        # ── Advanced / optional ───────────────────────────────────────────────
-        with st.expander("🔑 GPT-3.5 Rationale (optional)"):
-            use_openai = st.toggle("Use GPT-3.5 for explanations", value=False)
-            openai_key = ""
-            if use_openai:
-                openai_key = st.text_input("OpenAI API Key", type="password")
-                st.caption("Used only for generating natural language rationale.")
-
+        st.write("")
         st.caption("PortfolioAI v1.0 · NSE India")
 
     # ── MAIN AREA ─────────────────────────────────────────────────────────────
@@ -2873,21 +2825,30 @@ def main():
     #  FRESH INVESTMENT FLOW
     # ══════════════════════════════════════════════════════════════════════════
     if st.session_state.mode == "fresh":
-        # Welcome message — different tone if coming from planner
         _planned = float(st.session_state.get("planned_investment", 0.0))
-        if _planned > 0:
-            st.markdown(f"### AI Stock Portfolio — {fmt_inr(investment_inr, compact=True)} 🚀")
-        else:
-            st.markdown(f"### AI Stock Portfolio — {fmt_inr(investment_inr)}")
+        _risk_from_plan = st.session_state.get("risk_profile_from_planner", "moderate")
 
-        # What happens explanation + button
-        st.info(
-            "**🧠 What happens when you click:**\n\n"
-            "📰 AI reads the latest news for every stock on the list\n\n"
-            "📊 Checks which stocks look strong right now\n\n"
-            "🎯 Figures out the best mix for your risk level\n\n"
-            "✅ Gives you a ready-to-execute plan with exact rupee amounts"
-        )
+        if _planned > 0:
+            st.markdown(f"""
+            <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-left:4px solid #16a34a;
+                        border-radius:0 12px 12px 0; padding:1rem 1.25rem; margin-bottom:1.25rem;">
+                <div style="font-weight:700; color:#14532d; font-size:1rem;">
+                    Your financial plan is ready ✅
+                </div>
+                <div style="color:#166534; font-size:0.88rem; margin-top:0.3rem;">
+                    Stock budget: <strong>{fmt_inr(_planned)}</strong>
+                    &nbsp;·&nbsp; Risk: <strong>{_risk_from_plan.title()}</strong>
+                    &nbsp;·&nbsp; All set from your plan
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown("### One click to build your portfolio")
+            st.caption("Your amount and risk level are pre-filled from your financial plan.")
+        else:
+            st.markdown("### Build your AI stock portfolio")
+            st.caption("Set your investment amount in the sidebar, then click the button below.")
+
+        st.write("")
 
         if st.button("🚀 Start AI Analysis →", type="primary", use_container_width=True):
             _am = st.session_state.get("analysis_method", "llm")
@@ -2979,9 +2940,8 @@ def main():
             st.divider()
 
             # ── Tabs ──────────────────────────────────────────────────────────
-            t1, t2, t_factor, t3, t4, t5, t6 = st.tabs([
-                "📊 Allocation", "🤖 AI Analysis", "📐 Stock Scorecard",
-                "📉 Past Performance", "💡 Why these stocks?", "🌍 Market Conditions", "📋 Summary",
+            t1, t2, t3, t4 = st.tabs([
+                "📊 My Portfolio", "🤖 AI Signals", "📉 Performance", "🔬 Strategy Comparison",
             ])
 
             with t1:
@@ -3217,31 +3177,6 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
 
-            with t_factor:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">How strong is each stock? 📐</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        We score every stock on 3 things: <strong>momentum</strong> (is it trending up?),
-                        <strong>quality</strong> (is the company financially healthy?),
-                        and <strong>stability</strong> (how much does it jump around?).
-                        Higher score = stronger stock.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-                factor_df = feats.get("factor_scores")
-                if factor_df is None:
-                    factor_df = load_factor_scores_df()
-                if factor_df is not None:
-                    render_factor_scores_tab(factor_df, key_prefix="fresh_factor")
-                else:
-                    st.markdown("""
-                    <div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px;
-                                padding:1rem 1.2rem; color:#92400e;">
-                        📊 Stock scores not available yet — the data pipeline needs to run first.
-                    </div>
-                    """, unsafe_allow_html=True)
-
             with t3:
                 st.markdown("""
                 <div style="padding:0.6rem 0 1rem;">
@@ -3279,158 +3214,9 @@ def main():
                     """, unsafe_allow_html=True)
 
             with t4:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1.2rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">Why did the AI pick these stocks? 💡</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        Here's the plain-English reasoning behind each pick.
-                        No jargon — just honest explanations you can actually understand.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                for _, row in alloc.iterrows():
-                    t = row["ticker"]
-                    if t not in s_df.index:
-                        continue
-                    sent_row = s_df.loc[t]
-                    sent     = sent_row["label"]
-                    cfg      = SENTIMENT_CONFIG.get(sent, {})
-                    weight   = row["target_weight"]
-                    _meta    = STOCK_META.get(t, {})
-                    rationale= generate_rationale(
-                        t, weight, row["invested_inr"],
-                        sent_row, mu_bl[t], mu_prior[t], prices_inr,
-                        use_openai, openai_key,
-                    )
-
-                    # Friendly signal label
-                    _friendly_sent = {
-                        "bullish":          "🚀 Strong Buy",
-                        "slightly_bullish": "📈 Buy",
-                        "neutral":          "➡️ Hold",
-                        "slightly_bearish": "⚠️ Caution",
-                        "bearish":          "🚫 Avoid",
-                    }.get(sent, "➡️ Hold")
-
-                    _border_c = cfg.get("color", "#94a3b8")
-                    _amount   = fmt_inr(row["invested_inr"])
-                    _weight_pct = f"{weight:.0%}"
-
-                    # AI expected return vs market baseline
-                    _ai_view   = mu_bl[t]
-                    _mkt_view  = mu_prior[t]
-                    _edge      = _ai_view - _mkt_view
-                    _edge_text = (
-                        f"AI expects <strong>{_ai_view:.1%}/yr</strong> — "
-                        f"{'better' if _edge >= 0 else 'lower'} than market baseline of {_mkt_view:.1%}"
-                    )
-
-                    # 2–3 quick checkpoints
-                    _chk1 = "✅ News sentiment is positive" if sent in ("bullish","slightly_bullish") else \
-                            "⚠️ News is mixed — lower allocation" if sent == "neutral" else \
-                            "🔴 News is negative — minimal allocation"
-                    _chk2 = "✅ AI model sees above-average return potential" if _ai_view > _mkt_view else \
-                            "⚪ Return potential is near market average"
-                    _chk3 = f"✅ Gets {_weight_pct} of your portfolio ({_amount})"
-
-                    with st.expander(
-                        f"{_meta.get('flag','🏢')} {t} — {_meta.get('name',t)}  ·  {_friendly_sent}  ·  {_weight_pct}",
-                        expanded=False,
-                    ):
-                        st.markdown(f"""
-                        <div style="border-left:4px solid {_border_c}; padding:0.8rem 1.1rem;
-                                    background:#f0f9ff; border-radius:0 8px 8px 0; margin-bottom:0.8rem;">
-                            {_chk1}<br>{_chk2}<br>{_chk3}
-                            <div style="margin-top:0.6rem; color:#64748b; font-size:0.82rem;">{_edge_text}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.markdown(rationale)
-                        with st.expander("🔢 Technical details"):
-                            rc1, rc2, rc3, rc4 = st.columns(4)
-                            rc1.metric("AI Score",      f"{sent_row['final_score']:+.3f}")
-                            rc2.metric("Market Avg",    f"{mu_prior[t]:.2%}")
-                            rc3.metric("AI Estimate",   f"{mu_bl[t]:.2%}")
-                            rc4.metric("Weight",        f"{weight:.2%}")
-
-            with t5:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1.2rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">Is this a good time to invest? 🌍</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        We look at the overall market health — like a weather forecast for investing.
-                        Your portfolio is automatically adjusted based on what we see here.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if result_macro:
-                    render_macro_panel(result_macro, sec_sent, key_prefix="fresh")
-                else:
-                    st.markdown("""
-                    <div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px;
-                                padding:1rem 1.2rem; color:#92400e;">
-                        📡 Market condition data not loaded yet. Run the app with prices.csv available.
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                if sec_sent:
-                    st.markdown("#### Which sectors look good right now? 🏭")
-                    _sec_cards_html = ""
-                    for _sec, _val in sorted(sec_sent.items(), key=lambda x: -x[1]):
-                        if _val > 0.15:
-                            _sc_label, _sc_color, _sc_bg = "🟢 Bullish",  "#16a34a", "#f0fdf4"
-                        elif _val > 0.03:
-                            _sc_label, _sc_color, _sc_bg = "🟡 Positive", "#ca8a04", "#fefce8"
-                        elif _val < -0.15:
-                            _sc_label, _sc_color, _sc_bg = "🔴 Bearish",  "#dc2626", "#fef2f2"
-                        elif _val < -0.03:
-                            _sc_label, _sc_color, _sc_bg = "🟠 Caution",  "#ea580c", "#fff7ed"
-                        else:
-                            _sc_label, _sc_color, _sc_bg = "⚪ Neutral",  "#64748b", "#f8fafc"
-                        _sec_cards_html += f"""
-                        <div style="background:{_sc_bg}; border:1px solid #e2e8f0; border-radius:8px;
-                                    padding:0.55rem 0.9rem; margin:0.3rem 0; display:flex;
-                                    justify-content:space-between; align-items:center;">
-                            <span style="font-weight:600; color:#1e293b; font-size:0.9rem;">{_sec}</span>
-                            <span style="font-weight:700; color:{_sc_color}; font-size:0.85rem;">{_sc_label}</span>
-                        </div>"""
-                    st.markdown(_sec_cards_html, unsafe_allow_html=True)
-
-                analyst_cons = feats.get("analyst_consensus")
-                if analyst_cons is not None and not analyst_cons.empty:
-                    st.markdown("#### What do professional analysts say? 👔")
-                    st.caption("These are ratings from brokerage analysts — just one more data point we consider.")
-                    ac_rows = []
-                    for ticker in analyst_cons.index:
-                        score = float(analyst_cons[ticker])
-                        ac_rows.append({
-                            "Stock":     ticker,
-                            "Company":   STOCK_META.get(ticker, {}).get("name", ticker),
-                            "Signal":    "🟢 Strong Buy" if score > 0.6 else
-                                         "🟡 Buy" if score > 0.2 else
-                                         "🔴 Sell" if score < -0.2 else
-                                         "🟠 Strong Sell" if score < -0.6 else "⚪ Hold",
-                        })
-                    st.dataframe(pd.DataFrame(ac_rows), use_container_width=True, hide_index=True)
-
-            with t6:
-                st.markdown("#### Full Allocation Details")
-                detail = alloc.copy()
-                detail["target_weight"] = detail["target_weight"].map("{:.2%}".format)
-                detail["target_inr"]    = detail["target_inr"].map("₹{:,.0f}".format)
-                detail["price_inr"]     = detail["price_inr"].map("₹{:,.2f}".format)
-                detail["invested_inr"]  = detail["invested_inr"].map("₹{:,.0f}".format)
-                st.dataframe(detail, use_container_width=True, hide_index=True)
-
-                st.markdown("#### Summary")
-                for k, v in summary.items():
-                    if isinstance(v, float) and abs(v) < 10:
-                        st.write(f"**{k}:** {v:.4f}")
-                    elif isinstance(v, float):
-                        st.write(f"**{k}:** {fmt_inr(v)}")
-                    else:
-                        st.write(f"**{k}:** {v}")
+                st.markdown("#### Strategy Comparison")
+                st.caption("How our BL+Factor strategy compares against alternatives and random portfolios.")
+                render_strategy_comparison()
 
         else:
             # Landing state — show stock preview
@@ -3467,492 +3253,6 @@ def main():
                     })
                 st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  PORTFOLIO TRACKER FLOW
-    # ══════════════════════════════════════════════════════════════════════════
-    elif st.session_state.mode == "tracker":
-        if not data_status["required_ok"]:
-            render_setup_gate(data_status)
-            return
-        render_portfolio_tracker()
-        # Disclaimer already rendered inside render_portfolio_tracker
-        st.caption("PortfolioAI · Built for BTech Minor Project 2024–25 · NSE India")
-        return
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  PORTFOLIO REBALANCER FLOW
-    # ══════════════════════════════════════════════════════════════════════════
-    else:
-        st.markdown("""
-        <div style="background:#1e40af;
-                    border-radius:12px; padding:1rem 1.5rem; margin-bottom:1.5rem; color:white;">
-            <h2 style="margin:0 0 0.3rem; font-size:1.3rem;">Time to rebalance? Let's check 📊</h2>
-            <p style="margin:0; opacity:0.85; font-size:0.9rem;">
-                Tell us what you currently hold. We'll tell you exactly what to buy, sell, or keep —
-                so your money stays optimally invested.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # ── Holdings input table ──────────────────────────────────────────────
-        st.markdown("#### Step 1 — What do you currently hold?")
-        st.caption("Tip: Only fill in stocks you currently hold. Leave others at 0.")
-
-        # Build default table
-        if prices_inr is not None:
-            default_prices = {t: float(prices_inr.get(t, 0)) for t in STOCKS}
-        else:
-            default_prices = {t: 0.0 for t in STOCKS}
-
-        template_df = pd.DataFrame([
-            {
-                "Ticker":        t,
-                "Company":       STOCK_META.get(t, {}).get("name", t),
-                "Sector":        STOCK_META.get(t, {}).get("sector", ""),
-                "Current Price (₹)": default_prices.get(t, 0),
-                "Your Holdings (₹)": 0.0,
-            }
-            for t in STOCKS
-        ])
-
-        edited = st.data_editor(
-            template_df,
-            use_container_width=True,
-            disabled=["Ticker", "Company", "Sector", "Current Price (₹)"],
-            column_config={
-                "Your Holdings (₹)": st.column_config.NumberColumn(
-                    "Your Holdings (₹)",
-                    help="Enter the current ₹ value of your position in this stock",
-                    min_value=0, max_value=50_000_000, step=500,
-                    format="₹%d",
-                ),
-                "Current Price (₹)": st.column_config.NumberColumn(
-                    "Current Price (₹)", format="₹%.2f", disabled=True,
-                ),
-            },
-            num_rows="fixed",
-            hide_index=True,
-        )
-
-        current_holdings = {
-            row["Ticker"]: float(row["Your Holdings (₹)"])
-            for _, row in edited.iterrows()
-            if float(row["Your Holdings (₹)"]) > 0
-        }
-        total_current = sum(current_holdings.values())
-        total_capital = total_current + additional_inr
-
-        st.markdown(f"""
-        <div style="display:flex; gap:0.8rem; flex-wrap:wrap; margin:0.8rem 0 1rem;">
-            <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
-                        border-top:3px solid #3b82f6; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">You hold today</div>
-                <div style="font-size:1.4rem; font-weight:800; color:#1e293b; margin:0.2rem 0;">{fmt_inr(total_current, compact=True)}</div>
-            </div>
-            <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
-                        border-top:3px solid #16a34a; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">Adding now</div>
-                <div style="font-size:1.4rem; font-weight:800; color:#16a34a; margin:0.2rem 0;">{fmt_inr(additional_inr, compact=True)}</div>
-            </div>
-            <div style="flex:1; min-width:150px; background:white; border:1px solid #e2e8f0;
-                        border-top:3px solid #6366f1; border-radius:10px; padding:0.8rem 1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em;">Total to work with</div>
-                <div style="font-size:1.4rem; font-weight:800; color:#6366f1; margin:0.2rem 0;">{fmt_inr(total_capital, compact=True)}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.divider()
-
-        if st.button("📊 Generate My Rebalancing Plan", type="primary",
-                     use_container_width=True,
-                     disabled=(total_capital < 1000)):
-            if not current_holdings and additional_inr < 1000:
-                st.warning("Please enter your current holdings or an additional investment amount.")
-            else:
-                with st.spinner("Crunching the numbers… building your rebalancing plan 📊"):
-                    try:
-                        result = run_rebalance_optimizer(
-                            current_holdings, additional_inr, risk_profile,
-                            st.session_state.get("analysis_method", "llm"),
-                        )
-                        st.session_state.result    = result
-                        st.session_state.run_count += 1
-                    except Exception as e:
-                        st.error(f"Optimisation failed: {e}")
-                        st.stop()
-
-        result = st.session_state.result if (
-            st.session_state.result and "rebalance" in st.session_state.result
-        ) else None
-
-        if result:
-            rebal        = result["rebalance"]
-            alloc        = result["allocation"]
-            summary      = result["summary"]
-            feats        = result["features"]
-            mu_bl        = feats["mu_bl"]
-            mu_prior     = feats["mu_prior"]
-            s_df         = feats["sentiment_df"]
-            sec_sent_rb  = feats.get("sector_sentiment", {})
-            result_macro = result.get("macro_snapshot")
-
-            macro_scale = summary.get("macro_scale", 1.0)
-            macro_cash  = summary.get("macro_cash_buffer", 0.0)
-
-            st.divider()
-
-            # ── Macro overlay info ────────────────────────────────────────────
-            if result_macro and macro_cash > 0.02:
-                r_reg = result_macro["regime"]
-                r_vix = result_macro["vix"]
-                st.markdown(f"""
-                <div style="background:#fefce8; border:1px solid #fde68a; border-left:4px solid #ca8a04;
-                            border-radius:0 10px 10px 0; padding:0.8rem 1.1rem; margin-bottom:0.5rem;
-                            font-size:0.9rem; color:#92400e;">
-                    {r_reg['emoji']} <strong>Market caution applied</strong> —
-                    {r_reg['label']} market × VIX {r_vix['vix']:.1f}
-                    → only <strong>{macro_scale:.0%} of your money</strong> goes into stocks.
-                    <strong>{fmt_inr(total_capital * macro_cash, compact=True)}</strong>
-                    ({macro_cash:.0%}) is kept as cash for safety.
-                </div>
-                """, unsafe_allow_html=True)
-
-            # ── Action KPIs ───────────────────────────────────────────────────
-            buys  = rebal[rebal["action"] == "BUY"]
-            sells = rebal[rebal["action"] == "SELL"]
-            holds = rebal[rebal["action"] == "HOLD"]
-
-            _kpi1, _kpi2, _kpi3, _kpi4 = st.columns(4)
-            _kpi1.metric("Buy", f"{len(buys)} stocks", fmt_inr(summary['buys_inr'], compact=True))
-            _kpi2.metric("Sell", f"{len(sells)} stocks", fmt_inr(summary['sells_inr'], compact=True))
-            _kpi3.metric("Hold", f"{len(holds)} stocks")
-            _kpi4.metric("Brokerage Cost", fmt_inr(summary['transaction_cost_inr'], compact=True))
-
-            rb1, rb2, rb3, rb_factor, rb4, rb5 = st.tabs([
-                "📋 Rebalancing Plan", "📊 Portfolio View",
-                "🤖 AI Analysis", "📐 Stock Scorecard", "💡 Why these stocks?", "🌍 Market Conditions",
-            ])
-
-            with rb1:
-                # Main rebalancing chart
-                rb_chart = chart_rebalance(rebal)
-                if rb_chart:
-                    st.plotly_chart(rb_chart, use_container_width=True, key="rebal_trades_chart")
-
-                st.markdown("#### Detailed Action Plan")
-
-                # Colour-coded action table
-                action_rows = []
-                for _, row in rebal.sort_values(
-                    ["action", "trade_inr"], ascending=[True, False]
-                ).iterrows():
-                    t   = row["ticker"]
-                    act = row["action"]
-                    cfg = SENTIMENT_CONFIG.get(row["sentiment"], {})
-                    action_rows.append({
-                        "Action":         act,
-                        "Stock":          f"{cfg.get('badge','⚪')} {t}",
-                        "Company":        STOCK_META.get(t, {}).get("name", t),
-                        "You have (₹)":   fmt_inr(row["current_inr"]),
-                        "Target (₹)":     fmt_inr(row["target_inr"]),
-                        "Buy/Sell (₹)":   fmt_inr(row["trade_inr"]) if act != "HOLD" else "─",
-                        "No. of shares":  f"{row['shares_delta']:+.4g}" if act != "HOLD" else "─",
-                        "Share price":    fmt_inr(row["price_inr"]),
-                        "AI Signal":      f"{cfg.get('icon','─')} {row['sentiment']}",
-                        "Goal %":         f"{row['target_weight']:.1%}",
-                    })
-
-                action_df = pd.DataFrame(action_rows)
-
-                # Highlight rows by action
-                def _style(row):
-                    colors = {"BUY": "background-color:#f0fdf4",
-                              "SELL": "background-color:#fef2f2",
-                              "HOLD": ""}
-                    return [colors.get(row["Action"], "")] * len(row)
-
-                st.dataframe(
-                    action_df.style.apply(_style, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-
-                # Cash flow summary
-                net_cash = summary["sells_inr"] - summary["transaction_cost_inr"] / 2
-                _total_avail = net_cash + summary["additional_inr"]
-                st.markdown(f"""
-                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px;
-                            padding:1rem 1.2rem; margin-top:0.8rem;">
-                    <div style="font-weight:700; color:#1e293b; margin-bottom:0.6rem; font-size:0.95rem;">
-                        💸 Where the money goes
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem; font-size:0.83rem;">
-                        <div style="display:flex; justify-content:space-between;">
-                            <span style="color:#64748b;">Money you'll get from selling</span>
-                            <span style="font-weight:700; color:#16a34a;">{fmt_inr(summary['sells_inr'])}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between;">
-                            <span style="color:#64748b;">Extra money you're adding</span>
-                            <span style="font-weight:700; color:#1e293b;">{fmt_inr(summary['additional_inr'])}</span>
-                        </div>
-                        <div style="border-top:1px dashed #e2e8f0; padding-top:0.4rem; display:flex; justify-content:space-between;">
-                            <span style="color:#64748b;">Total available to buy</span>
-                            <span style="font-weight:700; color:#1e293b;">{fmt_inr(_total_avail)}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between;">
-                            <span style="color:#64748b;">Total you'll spend buying</span>
-                            <span style="font-weight:700; color:#3b82f6;">{fmt_inr(summary['buys_inr'])}</span>
-                        </div>
-                        <div style="display:flex; justify-content:space-between;">
-                            <span style="color:#64748b;">Broker fees (Zerodha est.)</span>
-                            <span style="font-weight:700; color:#92400e;">{fmt_inr(summary['transaction_cost_inr'])}</span>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if summary["buys_inr"] > _total_avail * 1.05:
-                    st.warning(
-                        "⚠️ The stocks you're buying cost a bit more than what you'll have from selling. "
-                        "Consider adding more money or the plan will adjust slightly."
-                    )
-                else:
-                    st.success("✅ The sells fully cover the buys — no extra cash needed from you.")
-
-            with rb2:
-                st.caption("Left = what you have now. Right = what you'll have after rebalancing.")
-                st.plotly_chart(
-                    chart_current_vs_target(rebal, total_capital),
-                    use_container_width=True,
-                    key="rebal_current_vs_target",
-                )
-
-                # Pie: current vs target
-                cc1, cc2 = st.columns(2)
-                current_for_pie = rebal[rebal["current_inr"] > 0].copy()
-                current_for_pie["label"] = current_for_pie["ticker"]
-                if not current_for_pie.empty:
-                    with cc1:
-                        fig_curr = go.Figure(go.Pie(
-                            labels=current_for_pie["ticker"],
-                            values=current_for_pie["current_inr"],
-                            hole=0.5, title="Current"
-                        ))
-                        fig_curr.update_layout(height=320, margin=dict(l=0,r=0,t=40,b=0))
-                        st.plotly_chart(fig_curr, use_container_width=True, key="rebal_pie_current")
-
-                with cc2:
-                    target_for_pie = alloc[alloc["invested_inr"] > 0].copy()
-                    fig_tgt = go.Figure(go.Pie(
-                        labels=target_for_pie["ticker"],
-                        values=target_for_pie["invested_inr"],
-                        hole=0.5, title="Target"
-                    ))
-                    fig_tgt.update_layout(height=320, margin=dict(l=0,r=0,t=40,b=0))
-                    st.plotly_chart(fig_tgt, use_container_width=True, key="rebal_pie_target")
-
-            with rb3:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">AI signal for each stock 🤖</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        Our AI reads recent news and market signals to decide which stocks
-                        get a bigger allocation and which get capped.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if sentiment_df is not None:
-                    _SIGNAL_MAP_RB = {
-                        "bullish":          ("🚀 Strong Buy",  "#16a34a", "#f0fdf4", "#bbf7d0", 100),
-                        "slightly_bullish": ("📈 Buy",         "#22c55e", "#f0fdf4", "#dcfce7",  70),
-                        "neutral":          ("➡️ Hold",        "#64748b", "#f8fafc", "#e2e8f0",  50),
-                        "slightly_bearish": ("⚠️ Caution",     "#ea580c", "#fff7ed", "#fed7aa",  30),
-                        "bearish":          ("🚫 Avoid",       "#dc2626", "#fef2f2", "#fecaca",  10),
-                    }
-                    for _ticker in s_df.index:
-                        _srow = s_df.loc[_ticker]
-                        _label = _srow["label"]
-                        _meta  = STOCK_META.get(_ticker, {})
-                        _sig_label, _sig_color, _sig_bg, _sig_border, _bar_pct = _SIGNAL_MAP_RB.get(
-                            _label, ("➡️ Hold", "#64748b", "#f8fafc", "#e2e8f0", 50)
-                        )
-                        _conf_pct  = int(_srow["confidence"] * 100)
-                        _headlines = int(_srow.get("num_headlines", 0))
-                        _pct_pos   = int(_srow.get("pct_positive", 0) * 100)
-                        _pct_neg   = int(_srow.get("pct_negative", 0) * 100)
-                        _conf_label = "Very confident" if _conf_pct >= 75 else \
-                                      "Fairly confident" if _conf_pct >= 55 else "Less certain"
-
-                        st.markdown(f"""
-                        <div style="background:white; border:1px solid #e2e8f0; border-left:4px solid {_sig_color};
-                                    border-radius:10px; padding:0.65rem 0.9rem; margin:0.4rem 0;
-                                    display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
-                            <div style="min-width:160px;">
-                                <div style="font-size:1rem; font-weight:700; color:#1e293b;">
-                                    {_meta.get('flag','🏢')} {_ticker}
-                                </div>
-                                <div style="font-size:0.78rem; color:#64748b;">{_meta.get('name', _ticker)}</div>
-                            </div>
-                            <div style="flex:1; min-width:180px;">
-                                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem;">
-                                    <span style="background:{_sig_bg}; color:{_sig_color}; border:1px solid {_sig_border};
-                                                 padding:0.15rem 0.65rem; border-radius:20px; font-size:0.8rem; font-weight:700;">
-                                        {_sig_label}
-                                    </span>
-                                    <span style="color:#94a3b8; font-size:0.75rem;">{_conf_label} · {_headlines} headlines</span>
-                                </div>
-                                <div style="background:#f1f5f9; border-radius:6px; height:8px; width:100%; overflow:hidden;">
-                                    <div style="background:{_sig_color}; width:{_bar_pct}%; height:100%; border-radius:6px;"></div>
-                                </div>
-                                <div style="display:flex; justify-content:space-between; margin-top:0.2rem;">
-                                    <span style="font-size:0.7rem; color:#16a34a;">👍 {_pct_pos}% positive news</span>
-                                    <span style="font-size:0.7rem; color:#dc2626;">👎 {_pct_neg}% negative</span>
-                                </div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    st.markdown("""
-                    <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px;
-                                padding:0.7rem 1rem; margin-top:0.8rem; font-size:0.83rem; color:#0369a1;">
-                        💡 <strong>How this affects your rebalance:</strong>
-                        Stocks marked <em>Strong Buy</em> have a higher target weight.
-                        Stocks marked <em>Avoid</em> are capped at 5%.
-                    </div>
-                    """, unsafe_allow_html=True)
-
-            with rb_factor:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">How strong is each stock? 📐</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        We score every stock on <strong>momentum</strong> (trending up?),
-                        <strong>quality</strong> (financially healthy?), and
-                        <strong>stability</strong> (not too jumpy?). Higher = stronger.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-                rb_factor_df = feats.get("factor_scores")
-                if rb_factor_df is None:
-                    rb_factor_df = load_factor_scores_df()
-                if rb_factor_df is not None:
-                    render_factor_scores_tab(rb_factor_df, key_prefix="rebal_factor")
-                else:
-                    st.markdown("""
-                    <div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px;
-                                padding:1rem 1.2rem; color:#92400e;">
-                        📊 Stock scores not available yet.
-                    </div>
-                    """, unsafe_allow_html=True)
-
-            with rb4:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1.2rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">Why these target positions? 💡</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        Here's why we're recommending each buy, sell, or hold — in plain language.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                for _, row in alloc.iterrows():
-                    t = row["ticker"]
-                    if t not in s_df.index:
-                        continue
-                    sent_row = s_df.loc[t]
-                    sent     = sent_row["label"]
-                    cfg      = SENTIMENT_CONFIG.get(sent, {})
-                    weight   = row["target_weight"]
-                    _meta_rb = STOCK_META.get(t, {})
-                    reb_row  = rebal[rebal["ticker"] == t]
-                    action   = reb_row["action"].values[0] if not reb_row.empty else "HOLD"
-                    act_icon = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(action, "⚪")
-                    _act_color = {"BUY": "#16a34a", "SELL": "#dc2626", "HOLD": "#64748b"}.get(action, "#64748b")
-                    rationale = generate_rationale(
-                        t, weight, row["invested_inr"], sent_row,
-                        mu_bl[t], mu_prior[t], prices_inr, use_openai, openai_key,
-                    )
-
-                    _friendly_sent_rb = {
-                        "bullish":          "🚀 Strong Buy",
-                        "slightly_bullish": "📈 Buy",
-                        "neutral":          "➡️ Hold",
-                        "slightly_bearish": "⚠️ Caution",
-                        "bearish":          "🚫 Avoid",
-                    }.get(sent, "➡️ Hold")
-
-                    _chk1_rb = "✅ Positive news sentiment" if sent in ("bullish","slightly_bullish") else \
-                               "⚠️ Mixed news" if sent == "neutral" else "🔴 Negative news — reduced allocation"
-                    _chk2_rb = "✅ AI expects above-average returns" if mu_bl[t] > mu_prior[t] else \
-                               "⚪ Return near market average"
-                    _chk3_rb = f"✅ Target: {weight:.0%} of portfolio"
-
-                    with st.expander(
-                        f"{act_icon} {action} — {_meta_rb.get('flag','🏢')} {t} "
-                        f"— {_meta_rb.get('name',t)}  ·  {_friendly_sent_rb}",
-                        expanded=False,
-                    ):
-                        st.markdown(f"""
-                        <div style="border-left:4px solid {_act_color}; padding:0.8rem 1.1rem;
-                                    background:#f8fafc; border-radius:0 8px 8px 0; margin-bottom:0.8rem;">
-                            <div style="font-weight:700; color:{_act_color}; margin-bottom:0.4rem;">
-                                {act_icon} Recommendation: {action}
-                            </div>
-                            {_chk1_rb}<br>{_chk2_rb}<br>{_chk3_rb}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.markdown(rationale)
-                        with st.expander("🔢 Technical details"):
-                            rc1, rc2, rc3, rc4 = st.columns(4)
-                            rc1.metric("Action",         action)
-                            rc2.metric("AI Score",       f"{sent_row['final_score']:+.3f}")
-                            rc3.metric("AI Estimate",    f"{mu_bl[t]:.2%}")
-                            rc4.metric("Target Weight",  f"{weight:.2%}")
-
-            with rb5:
-                st.markdown("""
-                <div style="padding:0.6rem 0 1rem;">
-                    <h4 style="color:#1e293b; margin:0 0 0.3rem;">What does the market look like? 🌍</h4>
-                    <p style="color:#64748b; font-size:0.9rem; margin:0;">
-                        Your rebalance plan already accounts for current market conditions.
-                        Here's what our AI is reading right now.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if result_macro:
-                    render_macro_panel(result_macro, sec_sent_rb, key_prefix="rebal")
-                else:
-                    st.markdown("""
-                    <div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px;
-                                padding:1rem 1.2rem; color:#92400e;">
-                        📡 Market condition data not loaded yet. Run the app with prices.csv available.
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                if sec_sent_rb:
-                    st.markdown("#### Sector signals")
-                    _sec_rb_html = ""
-                    for _sec, _val in sorted(sec_sent_rb.items(), key=lambda x: -x[1]):
-                        if _val > 0.15:
-                            _sc_l, _sc_c, _sc_b = "🟢 Bullish",  "#16a34a", "#f0fdf4"
-                        elif _val > 0.03:
-                            _sc_l, _sc_c, _sc_b = "🟡 Positive", "#ca8a04", "#fefce8"
-                        elif _val < -0.15:
-                            _sc_l, _sc_c, _sc_b = "🔴 Bearish",  "#dc2626", "#fef2f2"
-                        elif _val < -0.03:
-                            _sc_l, _sc_c, _sc_b = "🟠 Caution",  "#ea580c", "#fff7ed"
-                        else:
-                            _sc_l, _sc_c, _sc_b = "⚪ Neutral",  "#64748b", "#f8fafc"
-                        _sec_rb_html += f"""
-                        <div style="background:{_sc_b}; border:1px solid #e2e8f0; border-radius:8px;
-                                    padding:0.55rem 0.9rem; margin:0.3rem 0; display:flex;
-                                    justify-content:space-between; align-items:center;">
-                            <span style="font-weight:600; color:#1e293b; font-size:0.9rem;">{_sec}</span>
-                            <span style="font-weight:700; color:{_sc_c}; font-size:0.85rem;">{_sc_l}</span>
-                        </div>"""
-                    st.markdown(_sec_rb_html, unsafe_allow_html=True)
 
     # ── Disclaimer ────────────────────────────────────────────────────────────
     st.divider()
