@@ -1,6 +1,6 @@
 # 📈 PortfolioAI — GenAI-Driven Portfolio Optimisation for Indian Markets
 
-> **BTech Minor Project 2024–25**  
+> **BTech Minor Project 2025–26**  
 > AI-powered NSE portfolio optimisation combining Black-Litterman model with FinBERT sentiment analysis
 
 ---
