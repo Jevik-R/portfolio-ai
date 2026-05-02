@@ -331,13 +331,15 @@ def run_enhanced_backtest(
     val_bl_net  = float(initial_capital)   # BL after costs
     val_bl_gross= float(initial_capital)   # BL before costs
     val_eq_net  = float(initial_capital)   # Equal weight after costs
-    val_mom_net = float(initial_capital)   # Momentum-only equal weight after costs
+    val_mom_net = float(initial_capital)   # Momentum-only weighted after costs
 
     prev_bl_wts  = {}
-    prev_eq_wts  = {}
+    prev_eq_wts  = {}   # tracks drifted EQ weights for realistic cost modelling
     prev_mom_wts = {}
 
     total_costs       = 0.0
+    total_eq_costs    = 0.0
+    total_mom_costs   = 0.0
     total_buy_turnover  = 0.0
     total_sell_turnover = 0.0
 
@@ -365,6 +367,20 @@ def run_enhanced_backtest(
         # ── Optimise weights ───────────────────────────────────────────────────
         bl_weights = _bl_optimize(selected, prices_to, factor_df)
         eq_weights = {t: 1.0 / top_n for t in selected}
+
+        # ── Pure momentum weights: rank by raw momentum, weight by score ───────
+        mom_df = factor_df.sort_values("momentum", ascending=False)
+        pos_mom = mom_df[mom_df["momentum"] > 0]
+        if len(pos_mom) >= 5:
+            mom_top = pos_mom.head(top_n)
+        else:
+            mom_top = mom_df.head(max(5, top_n))
+        total_pos_mom = mom_top["momentum"].sum()
+        if total_pos_mom > 0:
+            mom_weights = {t: float(mom_top.loc[t, "momentum"]) / total_pos_mom
+                           for t in mom_top.index}
+        else:
+            mom_weights = {t: 1.0 / len(mom_top) for t in mom_top.index}
 
         # ── Get current prices for cost calculation ────────────────────────────
         try:
@@ -410,10 +426,10 @@ def run_enhanced_backtest(
             side = "buy" if dw > 0 else "sell"
             period_cost_eq += _zerodha_cost(trade_val, side)
 
-        # Momentum-only: same stocks as BL, equal weights, independent cost tracking
+        # Momentum-only: uses momentum-weighted portfolio (different from EQ)
         period_cost_mom = 0.0
-        for t in set(list(eq_weights.keys()) + list(prev_mom_wts.keys())):
-            new_w = float(eq_weights.get(t, 0.0))
+        for t in set(list(mom_weights.keys()) + list(prev_mom_wts.keys())):
+            new_w = float(mom_weights.get(t, 0.0))
             old_w = float(prev_mom_wts.get(t, 0.0))
             dw    = new_w - old_w
             if abs(dw) < MIN_TRADE_WT:
@@ -424,7 +440,9 @@ def run_enhanced_backtest(
             side = "buy" if dw > 0 else "sell"
             period_cost_mom += _zerodha_cost(trade_val, side)
 
-        total_costs += period_cost_bl
+        total_costs     += period_cost_bl
+        total_eq_costs  += period_cost_eq
+        total_mom_costs += period_cost_mom
 
         # ── Get period returns (next month prices) ─────────────────────────────
         period_mask   = (prices_df.index > rebal_date) & (prices_df.index <= next_date)
@@ -450,7 +468,7 @@ def run_enhanced_backtest(
 
         bl_ret  = _period_return(bl_weights, val_bl_net)
         eq_ret  = _period_return(eq_weights, val_eq_net)
-        mom_ret = _period_return(eq_weights, val_mom_net)   # same stocks, equal weights
+        mom_ret = _period_return(mom_weights, val_mom_net)
 
         # Nifty 50
         nifty_ret = 0.0
@@ -471,8 +489,21 @@ def run_enhanced_backtest(
         val_mom_net  *= (1 + mom_ret - cost_drag_mom)
 
         prev_bl_wts  = dict(bl_weights)
-        prev_eq_wts  = dict(eq_weights)
-        prev_mom_wts = dict(eq_weights)
+
+        # Compute drifted EQ weights so next period captures real rebalancing cost.
+        # Each stock's weight drifts proportionally to its return vs portfolio return.
+        drifted_eq_wts = {}
+        for t in eq_weights:
+            w0 = float(eq_weights[t])
+            p_s_ser = prices_to[t].dropna() if t in prices_to.columns else pd.Series()
+            p_e_ser = period_prices[t].dropna() if t in period_prices.columns else pd.Series()
+            if p_s_ser.empty or p_e_ser.empty or float(p_s_ser.iloc[-1]) <= 0:
+                drifted_eq_wts[t] = w0
+            else:
+                r_t = float(p_e_ser.iloc[-1]) / float(p_s_ser.iloc[-1]) - 1.0
+                drifted_eq_wts[t] = w0 * (1.0 + r_t) / (1.0 + eq_ret) if abs(1.0 + eq_ret) > 1e-9 else w0
+        prev_eq_wts  = drifted_eq_wts
+        prev_mom_wts = dict(mom_weights)
 
         records.append({
             "date":          rebal_date,
@@ -546,9 +577,9 @@ def run_enhanced_backtest(
 
     m1 = _metrics(results_df["val_bl_net"],   "Momentum+Vol BL  (After Costs)",  total_costs)
     m2 = _metrics(results_df["val_bl_gross"],  "Momentum+Vol BL  (Before Costs)", 0.0)
-    m3 = _metrics(results_df["val_eq_net"],    "Equal Weight     (After Costs)",  0.0)
+    m3 = _metrics(results_df["val_eq_net"],    "Equal Weight     (After Costs)",  total_eq_costs)
     m4 = _metrics(nifty_val,                   "Nifty 50         (Buy & Hold)",   0.0)
-    m5 = _metrics(results_df["val_mom_net"],   "Momentum Only    (After Costs)",  0.0)
+    m5 = _metrics(results_df["val_mom_net"],   "Momentum Only    (After Costs)",  total_mom_costs)
 
     # Add cost drag explicitly to before-costs row
     m2["total_costs_inr"] = 0

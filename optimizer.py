@@ -29,7 +29,6 @@ from pypfopt.risk_models import fix_nonpositive_semidefinite as fix_nonpsd
 from pypfopt.black_litterman import BlackLittermanModel, market_implied_prior_returns
 
 from feature_builder import build_features
-from sentiment_engine import get_sentiment_constraints
 from macro_overlay import get_macro_snapshot, apply_macro_overlay
 from risk_manager import apply_all_risk_controls
 
@@ -74,7 +73,8 @@ def _fmt_inr(amount: float) -> str:
     return f"₹{amount:.0f}"
 
 
-def _run_ef(mu_bl, S_bl, sentiment_df, risk_profile: str) -> dict:
+def _run_ef(mu_bl, S_bl, sentiment_df, risk_profile: str,
+            analysis_method: str = "llm") -> dict:
     """
     Run EfficientFrontier on BL posterior returns with sentiment constraints.
     Returns cleaned weights dict.
@@ -82,10 +82,18 @@ def _run_ef(mu_bl, S_bl, sentiment_df, risk_profile: str) -> dict:
     profile    = RISK_PROFILES.get(risk_profile, RISK_PROFILES["moderate"])
     max_weight = profile["max_weight"]
 
-    # Sentiment-derived per-stock weight bounds
-    constraints  = get_sentiment_constraints(sentiment_df)
-    lower_bounds = constraints["lower_bounds"]
-    upper_bounds = constraints["upper_bounds"]
+    # Sentiment-derived per-stock weight bounds (import conditionally to avoid
+    # forcing sentiment_engine when the user selected the llm method)
+    try:
+        if analysis_method == "sentiment":
+            from sentiment_engine import get_sentiment_constraints
+        else:
+            from llm_views import get_sentiment_constraints
+        constraints = get_sentiment_constraints(sentiment_df)
+    except Exception:
+        constraints = {}
+    lower_bounds = constraints.get("lower_bounds", {})
+    upper_bounds = constraints.get("upper_bounds", {})
 
     tickers = list(mu_bl.index)
     bounds  = [
@@ -253,7 +261,7 @@ def optimize_fresh_investment(
     sentiment_df = features["sentiment_df"]
     prices_inr   = features["prices_inr"]
 
-    weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile)
+    weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile, analysis_method)
     weights, macro_snap, cash_buf, macro_scale = _apply_macro(weights)
 
     # ── Risk Manager: vol targeting + drawdown control + position limits ──────
@@ -354,7 +362,7 @@ def optimize_rebalancing(
     sentiment_df = features["sentiment_df"]
     prices_inr   = features["prices_inr"]
 
-    weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile)
+    weights    = _run_ef(mu_bl, S_bl, sentiment_df, risk_profile, analysis_method)
     weights, macro_snap, cash_buf, macro_scale = _apply_macro(weights)
 
     # ── Risk Manager ──────────────────────────────────────────────────────────

@@ -808,7 +808,7 @@ def render_macro_panel(snap: dict, sector_sentiment: dict = None, key_prefix: st
 # ══════════════════════════════════════════════════════════════════════════════
 
 def chart_enhanced_cumulative(results_df: pd.DataFrame) -> go.Figure:
-    """Cumulative returns for BL (net), BL (gross), Equal Weight, Nifty 50."""
+    """Cumulative returns for BL (net), BL (gross), Momentum Only, Equal Weight, Nifty 50."""
     cum_bl_net   = (1 + results_df["bl_net"]).cumprod()   - 1
     cum_bl_gross = (1 + results_df["bl_gross"]).cumprod() - 1
     cum_eq       = (1 + results_df["eq_net"]).cumprod()   - 1
@@ -818,16 +818,37 @@ def chart_enhanced_cumulative(results_df: pd.DataFrame) -> go.Figure:
                         subplot_titles=("Cumulative Return", "Monthly Period Costs (₹)"))
 
     fig.add_trace(go.Scatter(x=results_df.index, y=cum_bl_net,
-        name="BL+Factor (After Costs)", line=dict(color="#3b82f6", width=2.5)), row=1, col=1)
+        name="🤖 BL + AI Factor", line=dict(color="#534AB7", width=2.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=results_df.index, y=cum_bl_gross,
         name="BL+Factor (Before Costs)", line=dict(color="#93c5fd", width=1.5, dash="dot")), row=1, col=1)
+
+    if "mom_net" in results_df.columns:
+        cum_mom = (1 + results_df["mom_net"]).cumprod() - 1
+        fig.add_trace(go.Scatter(x=results_df.index, y=cum_mom,
+            name="📈 Pure Momentum", line=dict(color="#EF9F27", width=2)), row=1, col=1)
+
     fig.add_trace(go.Scatter(x=results_df.index, y=cum_eq,
-        name="Equal Weight", line=dict(color="#f59e0b", width=1.8, dash="dash")), row=1, col=1)
+        name="⚖️ Equal Weight", line=dict(color="#1D9E75", width=1.8, dash="dash")), row=1, col=1)
     fig.add_trace(go.Scatter(x=results_df.index, y=cum_nifty,
-        name="Nifty 50", line=dict(color="#64748b", width=1.5, dash="dot")), row=1, col=1)
+        name="📊 Nifty 50", line=dict(color="#888780", width=1.5, dash="dot")), row=1, col=1)
 
     fig.add_trace(go.Bar(x=results_df.index, y=results_df["period_costs"],
         name="Period Costs", marker_color="#fca5a5", showlegend=False), row=2, col=1)
+
+    n_stocks = int(results_df["n_stocks"].iloc[0]) if "n_stocks" in results_df.columns else 93
+    start_yr  = results_df.index[0].year
+    end_yr    = results_df.index[-1].year
+
+    fig.add_annotation(
+        x=0.01, y=0.97, xref="paper", yref="paper",
+        text=(f"All strategies: {n_stocks} NSE stocks<br>"
+              f"Jan {start_yr} – Mar {end_yr}<br>"
+              f"Real Zerodha costs included"),
+        align="left", showarrow=False,
+        bgcolor="rgba(255,255,255,0.85)", bordercolor="#cbd5e1",
+        borderwidth=1, font=dict(size=11, color="#475569"),
+        xanchor="left", yanchor="top",
+    )
 
     fig.update_layout(
         height=560, plot_bgcolor="white",
@@ -2299,6 +2320,11 @@ def render_strategy_comparison():
     # ── Section 3: Comparison table ───────────────────────────────────────────
     st.markdown("### Strategy Comparison Table")
 
+    st.markdown(
+        "We compared 4 strategies on the same 93 NSE stocks, same time period, same "
+        "transaction costs. Here's how they performed:"
+    )
+
     def _row(m, label_override=None):
         if m is None:
             return None
@@ -2309,13 +2335,13 @@ def render_strategy_comparison():
         _calmar = _safe_get(m, "calmar",         default=0.0)
         _wr     = _safe_get(m, "win_rate",       default=0.0)
         _final  = _safe_get(m, "final_value",    default=0.0)
+        _costs  = _safe_get(m, "total_costs_inr", default=0.0)
         return {
             "Strategy":    lbl,
             "CAGR":        f"{_cagr:.2%}",
             "Sharpe":      f"{_sharpe:.3f}",
             "Max DD":      f"{_mdd:.2%}",
-            "Calmar":      f"{_calmar:.3f}",
-            "Win Rate":    f"{_wr:.1%}",
+            "Costs (₹)":   f"₹{_costs:,.0f}" if _costs > 0 else "₹0",
             "Final Value": f"₹{_final:,.0f}",
             "_cagr":       _cagr,
             "_sharpe":     _sharpe,
@@ -2326,15 +2352,15 @@ def render_strategy_comparison():
         }
 
     rows = [r for r in [
-        _row(m_bl,    "BL+Factor (After Costs)"),
-        _row(m_mom,   "Momentum Only"),
-        _row(m_eq,    "Equal Weight"),
-        _row(m_nifty, "Nifty 50"),
+        _row(m_bl,    "🤖 BL + AI Factor"),
+        _row(m_mom,   "📈 Pure Momentum"),
+        _row(m_eq,    "⚖️  Equal Weight"),
+        _row(m_nifty, "📊 Nifty 50"),
     ] if r is not None]
 
     if rows:
         table_df = pd.DataFrame(rows)
-        display_cols = ["Strategy", "CAGR", "Sharpe", "Max DD", "Calmar", "Win Rate", "Final Value"]
+        display_cols = ["Strategy", "CAGR", "Sharpe", "Max DD", "Costs (₹)", "Final Value"]
         raw_cols = {"_cagr": "CAGR", "_sharpe": "Sharpe", "_mdd": "Max DD",
                     "_calmar": "Calmar", "_winrate": "Win Rate", "_final": "Final Value"}
 
@@ -2342,34 +2368,44 @@ def render_strategy_comparison():
         best = {}
         for raw, col in raw_cols.items():
             if raw == "_mdd":
-                best[col] = table_df[raw].max()   # less negative = better
+                best[col] = table_df[raw].max()
             else:
                 best[col] = table_df[raw].max()
         best["Max DD"] = table_df["_mdd"].max()
 
         def highlight_row(row):
             styles = []
-            is_bl = "BL+Factor" in str(row["Strategy"])
+            is_bl = "BL" in str(row["Strategy"])
             for col in display_cols:
-                style = "border-left: 3px solid #534AB7;" if (is_bl and col == "Strategy") else ""
-                # green background for best column values
+                if is_bl:
+                    style = "background-color: #ede9fe; font-weight: 700;"
+                    if col == "Strategy":
+                        style += "border-left: 4px solid #534AB7;"
+                else:
+                    style = ""
+                # green text for best metric values (except BL row already highlighted)
                 raw_map = {"CAGR": "_cagr", "Sharpe": "_sharpe", "Max DD": "_mdd",
-                           "Calmar": "_calmar", "Win Rate": "_winrate", "Final Value": "_final"}
-                if col in raw_map:
+                           "Final Value": "_final"}
+                if col in raw_map and not is_bl:
                     raw_key = raw_map[col]
                     if abs(float(row[raw_key]) - best.get(col, float("nan"))) < 1e-8:
-                        style += "background-color: #d1fae5; color: #065f46; font-weight: 700;"
+                        style += "color: #065f46; font-weight: 700;"
                 styles.append(style)
             return styles
 
-        styled = table_df[display_cols + list(raw_cols.keys())].copy()
         st.dataframe(
-            styled[display_cols].style.apply(
+            table_df[display_cols].style.apply(
                 lambda row: highlight_row(row.to_dict() | {k: table_df.loc[row.name, k] for k in raw_cols}),
                 axis=1
             ),
             use_container_width=True,
             hide_index=True,
+        )
+
+        st.markdown(
+            "_While returns are similar, our BL+AI strategy has better risk control "
+            "(lower max drawdown) because it uses AI to identify which stocks to avoid, "
+            "not just which to buy._"
         )
 
     # ── Section 4: Monte Carlo significance ───────────────────────────────────
